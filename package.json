@@ -1,0 +1,53 @@
+{
+  "name": "dsh-open-in-ide",
+  "version": "0.1.0",
+  "description": "Open file references from the DeepSeek Harness chat output in your IDE (Visual Studio Code by default), positioned at the referenced line.",
+  "type": "module",
+  "license": "MIT",
+  "author": "harrio",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harrio/dsh-open-in-ide.git"
+  },
+  "homepage": "https://github.com/harrio/dsh-open-in-ide#readme",
+  "bugs": {
+    "url": "https://github.com/harrio/dsh-open-in-ide/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "vscode",
+    "cursor",
+    "ide",
+    "editor"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}

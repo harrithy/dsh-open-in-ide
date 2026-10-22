@@ -1,0 +1,9 @@
+# Normalize line endings for a cross-platform plugin.
+* text=auto eol=lf
+
+# Binary artwork
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

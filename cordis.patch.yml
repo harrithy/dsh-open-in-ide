@@ -1,0 +1,28 @@
+# Open file references from the chat output in the chosen IDE (VS Code by default).
+#
+# A click on a file-reference chip in an assistant message opens that file in
+# the IDE picked in Settings → General at the referenced line; Alt-click keeps
+# the shipped in-app preview. The IDE selector stores the choice in the browser.
+#
+# Override this row in the profile's own cordis.patch.yml to change behavior:
+#
+#   - id: open-in-ide
+#     config:
+#       command: 'C:\Users\me\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd'
+#       reuseWindow: true
+- insert:
+    - id: open-in-ide
+      name: 'dsh-open-in-ide'
+      config:
+        # Explicit editor CLI: a bare PATH name or an absolute path. When set it
+        # wins over the Settings selector; empty keeps the selector authoritative.
+        command: ''
+        # Fallback IDE when the browser sends no choice: vscode |
+        # vscode-insiders | cursor | windsurf.
+        editor: vscode
+        # Add --reuse-window so the file opens in the most recent window.
+        reuseWindow: false
+        # Extra arguments placed before the target path/--goto pair.
+        extraArgs: []
+        # Early-failure watch window for the detached launcher, in milliseconds.
+        launchWatchMs: 2000

@@ -1,0 +1,16 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+
+# Local logs and caches
+*.log
+.cache/
+.DS_Store
+Thumbs.db
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*~
