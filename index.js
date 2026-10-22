@@ -174,6 +174,28 @@ const EDITOR_MAC_APPS = {
 /** Where the Windows focus helper script lives between clicks. */
 const FOCUS_SCRIPT_PATH = join(tmpdir(), 'dsh-open-in-ide-focus.ps1')
 
+/**
+ * Files and directories that mark a project root while walking up from a file.
+ * `.git`/`.hg` win over the rest, so a repository root is preferred over a
+ * nested package manifest.
+ */
+const DEFAULT_PROJECT_MARKERS = [
+  '.git',
+  '.hg',
+  'package.json',
+  'pyproject.toml',
+  'Cargo.toml',
+  'go.mod',
+  'pom.xml',
+  'build.gradle',
+  'build.gradle.kts',
+  'composer.json',
+  'Gemfile',
+  'mix.exs',
+  'pubspec.yaml',
+  'CMakeLists.txt',
+]
+
 /** Request bodies are tiny JSON objects; anything larger is hostile. */
 const MAX_BODY_BYTES = 64 * 1024
 /** Longest path accepted from the browser. */
@@ -204,6 +226,9 @@ function normalizeConfig(input) {
   const watch = Number(value.launchWatchMs)
   const focusDelay = Number(value.focusDelayMs)
   const editor = typeof value.editor === 'string' ? value.editor.trim() : ''
+  const markers = Array.isArray(value.projectMarkers)
+    ? value.projectMarkers.filter((entry) => typeof entry === 'string' && entry !== '' && !/[\\/]/u.test(entry))
+    : []
   return {
     command: typeof value.command === 'string' ? value.command.trim() : '',
     commandKind: value.commandKind === KIND_JETBRAINS ? KIND_JETBRAINS : KIND_VSCODE,
@@ -211,6 +236,8 @@ function normalizeConfig(input) {
     extraArgs,
     focusDelayMs: Number.isFinite(focusDelay) ? Math.max(0, Math.min(5000, Math.trunc(focusDelay))) : 350,
     focusWindow: value.focusWindow !== false,
+    openProjectFolder: value.openProjectFolder !== false,
+    projectMarkers: markers.length > 0 ? markers : DEFAULT_PROJECT_MARKERS,
     reuseWindow: value.reuseWindow === true,
     launchWatchMs: Number.isFinite(watch) ? Math.max(250, Math.min(60_000, Math.trunc(watch))) : 2000,
   }
@@ -905,12 +932,45 @@ async function resolveLauncher(ctx, config, requestedEditor) {
 }
 
 /**
+ * Find the project root a file belongs to: the nearest VCS root, or else the
+ * nearest project manifest, walking up from the file's directory. Returns
+ * undefined when no marker is found, in which case the editor opens the file
+ * without a folder argument.
+ */
+function projectRootOf(filePath, markers) {
+  const manifestMarkers = markers.filter((marker) => marker !== '.git' && marker !== '.hg')
+  const vcsMarkers = markers.filter((marker) => marker === '.git' || marker === '.hg')
+  let directory = dirname(filePath)
+  let nearestManifest
+  for (let depth = 0; depth < 24; depth += 1) {
+    for (const marker of vcsMarkers) {
+      if (existsSync(join(directory, marker))) return directory
+    }
+    if (nearestManifest === undefined) {
+      for (const marker of manifestMarkers) {
+        if (existsSync(join(directory, marker))) {
+          nearestManifest = directory
+          break
+        }
+      }
+    }
+    const parent = dirname(directory)
+    if (parent === directory) break
+    directory = parent
+  }
+  return nearestManifest
+}
+
+/**
  * Build the launcher arguments for one editor family.
- * VS Code family: `--goto <path>:<line>[:<column>]`.
- * JetBrains family: `--line <line> <path>` (no column support).
+ * VS Code family: `--goto <path>:<line>[:<column>]`, plus the project folder so
+ * a window without that folder opens the project instead of dropping a loose
+ * file into the most recent window.
+ * JetBrains family: `--line <line> <path>` (no column support); the IDE manages
+ * projects itself, so no folder argument is added.
  * A configured `command` follows the same families through `commandKind`.
  */
-function launchArgs(kind, target, line, column, config) {
+function launchArgs(kind, target, line, column, config, projectRoot) {
   const args = [...config.extraArgs]
   if (kind === KIND_JETBRAINS) {
     if (target.type === 'file' && line !== undefined) args.push('--line', String(line))
@@ -923,6 +983,7 @@ function launchArgs(kind, target, line, column, config) {
   } else {
     args.push(target.processPath)
   }
+  if (projectRoot !== undefined && target.type === 'file') args.push(projectRoot)
   return args
 }
 
@@ -1072,7 +1133,13 @@ export function apply(ctx, rawConfig) {
       throw error
     }
 
-    const args = launchArgs(launcher.kind, target, body.line, body.column, config)
+    // Open the file together with its project folder so VS Code opens (or
+    // reuses) the project window instead of dropping a loose file into the last
+    // active window. JetBrains manages projects itself, so it gets no folder.
+    const projectRoot = config.openProjectFolder && target.type === 'file' && launcher.kind === KIND_VSCODE
+      ? projectRootOf(target.processPath, config.projectMarkers)
+      : undefined
+    const args = launchArgs(launcher.kind, target, body.line, body.column, config, projectRoot)
     const startDirectory = target.type === 'directory' ? target.processPath : dirname(target.processPath)
     const cwd = existsSync(startDirectory) ? startDirectory : undefined
     try {
@@ -1089,9 +1156,13 @@ export function apply(ctx, rawConfig) {
     let focused
     if (config.focusWindow) {
       const hints = [basename(target.processPath)]
+      if (projectRoot !== undefined) {
+        const projectName = basename(projectRoot)
+        if (projectName !== '' && !hints.includes(projectName)) hints.push(projectName)
+      }
       if (workspace !== undefined) {
         const workspaceName = basename(workspace)
-        if (workspaceName !== '' && workspaceName !== hints[0]) hints.push(workspaceName)
+        if (workspaceName !== '' && !hints.includes(workspaceName)) hints.push(workspaceName)
       }
       focused = await focusEditorWindow(launcher.editor, launcher.command, hints, config)
     }
@@ -1102,6 +1173,7 @@ export function apply(ctx, rawConfig) {
       type: target.type,
       line: body.line ?? null,
       column: body.column ?? null,
+      project: projectRoot ?? null,
       editor: launcher.editor,
       kind: launcher.kind,
       launcher: launcher.command,

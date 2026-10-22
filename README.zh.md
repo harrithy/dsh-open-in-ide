@@ -37,6 +37,10 @@
 ## 功能
 
 * **单击**回答中的文件引用 chip，用所选 IDE 打开对应文件并定位到引用的行。
+* **连同项目一起打开**：VS Code 家族会沿路径向上找项目根（`.git`/`.hg`，否则
+  `package.json`、`Cargo.toml`、`pom.xml` 等标记），把项目目录作为文件夹参数传
+  给 CLI，于是 VS Code 会**打开或复用项目窗口**，而不是把文件变成散落标签塞进最近
+  使用的窗口。没有任何项目标记的文件仍按原方式打开。
 * 打开后会把 IDE 窗口**提到最前**（窗口最小化时先恢复）。Windows 通过一个小型
   Win32 助手绕过“后台进程无前台权限”的限制；macOS 用 `osascript` 激活应用；
   Linux 尝试 `wmctrl` / `xdotool`。
@@ -120,6 +124,8 @@
 | `commandKind` | `vscode` | 配置了 `command` 时使用的启动约定：`vscode`（`--goto`）或 `jetbrains`（`--line`）。`command` 为空时忽略。 |
 | `editor` | `vscode` | 请求未携带选择时的回退 IDE：任意受支持的 id，如 `vscode`、`cursor`、`idea`、`pycharm`、`webstorm`。 |
 | `reuseWindow` | `false` | 追加 `--reuse-window`，在最近窗口打开（仅 VS Code 家族）。VS Code 本身会把文件路由到已打开该目录的窗口。 |
+| `openProjectFolder` | `true` | 把文件所属项目根作为文件夹参数传入，让 VS Code 打开/复用项目窗口（仅 VS Code 家族）。设为 false 交给 VS Code 决定。 |
+| `projectMarkers` | 内置列表 | 覆盖项目根标记：不带路径分隔符的文件/目录名，例如 `['.git', 'package.json', 'Cargo.toml']`。 |
 | `focusWindow` | `true` | 打开后把 IDE 窗口提到最前（最小化时先恢复）。设为 false 则交给系统决定。 |
 | `focusDelayMs` | `350` | 首次置前尝试的延迟；冷启动的编辑器窗口还没出现时会自动重试几次。 |
 | `extraArgs` | `[]` | 放在目标参数之前的额外参数，例如 `["-n"]`。 |
@@ -168,6 +174,8 @@
 * 列号只会传给 VS Code 家族；JetBrains 启动器只接收行号。
 * 置前是尽力而为：Windows 通过 Win32 助手实现（极特殊的前台策略或安全软件仍可能
   拒绝），macOS/Linux 依赖 `osascript` / `wmctrl` / `xdotool` 是否可用。
+* 项目文件夹注入是启发式且仅用于 VS Code 家族：向上找最近的 `.git`/`.hg` 或
+  manifest 标记。JetBrains 保持自己的项目管理，只接收文件/行号，不传文件夹。
 * 行号/列号来自可见的 chip 文字；链接文字没有行号时只打开文件、不定位。
 * 编辑器选择按浏览器保存（`localStorage`）；不同浏览器或 origin 各自独立。
 

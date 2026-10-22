@@ -31,6 +31,14 @@
         # Add --reuse-window so the file opens in the most recent window
         # (VS Code family only).
         reuseWindow: false
+        # Open the file with its project folder (nearest .git/.hg, else the
+        # nearest package.json/Cargo.toml/pom.xml/... marker). VS Code then opens
+        # or reuses the project window instead of inserting a loose file into the
+        # most recently used window. VS Code family only.
+        openProjectFolder: true
+        # Override the project-root markers if the defaults do not fit
+        # (file or directory names, no path separators):
+        # projectMarkers: ['.git', 'package.json', 'Cargo.toml']
         # Bring the editor window to the foreground after opening it. A
         # detached launch from the background host has no foreground rights, so
         # the plugin raises the window explicitly.

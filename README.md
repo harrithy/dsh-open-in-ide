@@ -40,6 +40,11 @@ VS Code is not installed.
 
 * **Plain click** on a file-reference chip in an assistant message opens that
   file in the selected IDE at the referenced line.
+* **The file's project opens with it.** For the VS Code family the host finds the
+  nearest project root (`.git`/`.hg`, else `package.json`, `Cargo.toml`,
+  `pom.xml`, …) and passes it as a folder argument, so VS Code opens or reuses
+  the **project window** instead of dropping a loose file into the most recently
+  used window. A file without any project marker opens as before.
 * After opening, the editor window is **brought to the foreground** (and restored
   if it was minimized). Windows uses a small Win32 helper to defeat the
   background-process foreground lock; macOS activates via `osascript`; Linux
@@ -136,6 +141,8 @@ updates):
 | `commandKind` | `vscode` | Launcher contract used for a configured `command`: `vscode` (`--goto`) or `jetbrains` (`--line`). Ignored while `command` is empty. |
 | `editor` | `vscode` | Fallback IDE when a request carries no selection: any supported id, e.g. `vscode`, `cursor`, `idea`, `pycharm`, `webstorm`. |
 | `reuseWindow` | `false` | Add `--reuse-window` so the file opens in the most recent window (VS Code family only). VS Code already routes files into a window that has the containing folder open. |
+| `openProjectFolder` | `true` | Pass the file's project root as a folder argument so VS Code opens or reuses the project window (VS Code family only). Set `false` to let VS Code decide. |
+| `projectMarkers` | built-in list | Override the project-root markers: file or directory names without separators, e.g. `['.git', 'package.json', 'Cargo.toml']`. |
 | `focusWindow` | `true` | Bring the editor window to the foreground after opening it (restore if minimized). Disable to let the OS decide. |
 | `focusDelayMs` | `350` | Delay before the first foreground attempt; when a cold-started editor has no window yet the plugin retries a few times. |
 | `extraArgs` | `[]` | Extra arguments placed before the target arguments, e.g. `["-n"]`. |
@@ -192,6 +199,9 @@ and the host resolves it to an executable it verified.
 * Window raising is best-effort: Windows uses a Win32 helper (an unusual
   foreground policy or security tool can still refuse the change), while macOS
   and Linux depend on `osascript` / `wmctrl` / `xdotool` being available.
+* Project-folder injection is heuristic and VS Code-family only: it walks up to
+  the nearest `.git`/`.hg` or manifest marker. JetBrains IDEs keep their own
+  project management and receive only the file/line; no folder is passed.
 * Line/column come from the visible chip label; when a link's label does not
   repeat the line, the file opens without a line target.
 * The editor choice is per browser (`localStorage`); another browser or origin
