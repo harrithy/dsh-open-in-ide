@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Open File Links in Your IDE",
-    "description": "Clicking a file reference in assistant output opens that file in the IDE chosen in Settings → General (Visual Studio Code by default) and positions the cursor at the referenced line. Alt-click still uses the built-in preview."
+    "description": "Clicking a file reference in assistant output opens that file in the IDE chosen in Settings → General (VS Code family or JetBrains, Visual Studio Code by default) and positions the cursor at the referenced line. Alt-click still uses the built-in preview."
   }
 }

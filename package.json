@@ -1,7 +1,7 @@
 {
   "name": "dsh-open-in-ide",
-  "version": "0.1.0",
-  "description": "Open file references from the DeepSeek Harness chat output in your IDE (Visual Studio Code by default), positioned at the referenced line.",
+  "version": "0.2.0",
+  "description": "Open file references from the DeepSeek Harness chat output in your IDE (VS Code family or JetBrains, Visual Studio Code by default), positioned at the referenced line.",
   "type": "module",
   "license": "MIT",
   "author": "harrithy",
@@ -19,6 +19,10 @@
     "deepseek-harness",
     "vscode",
     "cursor",
+    "jetbrains",
+    "intellij",
+    "pycharm",
+    "webstorm",
     "ide",
     "editor"
   ],

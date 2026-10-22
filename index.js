@@ -2,14 +2,19 @@
  * Host half of the `open-in-ide` bundle.
  *
  * Two routes:
- * - `GET /open-in-ide/editors` scans this host for the supported IDEs
- *   (VS Code, VS Code Insiders, Cursor, Windsurf) and reports which ones it can
- *   launch; the Settings → General row lists only those.
+ * - `GET /open-in-ide/editors` scans this host for the supported IDEs and
+ *   reports which ones it can launch; the Settings → General row lists only
+ *   those.
  * - `POST /open-in-ide/open` receives `{ sessionId, path, line, column,
  *   editor }`, resolves the path in the Session's workspace, then launches the
- *   selected editor CLI (VS Code by default) with
- *   `--goto <path>:<line>:<column>`, so the editor opens the file at the exact
- *   position. A directory is opened as a workspace folder instead.
+ *   selected editor at the referenced line. A directory is opened as a workspace
+ *   folder instead.
+ *
+ * Two editor families are supported, each with its own launcher contract:
+ * - VS Code family (VS Code, VS Code Insiders, Cursor, Windsurf):
+ *   `--goto <path>:<line>:<column>`
+ * - JetBrains family (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm,
+ *   Rider, RubyMine, DataGrip, RustRover): `--line <line> <path>`
  *
  * Security: both routes are fenced by the composition's `connection` service
  * first (Host/Origin trust plus browser authentication), and the open route
@@ -18,7 +23,7 @@
  * command line.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
@@ -28,9 +33,130 @@ const ROUTE_PATH = '/open-in-ide/open'
 const EDITORS_PATH = '/open-in-ide/editors'
 /** Editor used when neither the request nor the row config names one. */
 const DEFAULT_EDITOR = 'vscode'
-/** Editors this plugin can launch, in preference order; the browser sends these ids. */
-const EDITOR_ORDER = ['vscode', 'vscode-insiders', 'cursor', 'windsurf']
+
+/** Launcher contract of one editor family. */
+const KIND_VSCODE = 'vscode'
+const KIND_JETBRAINS = 'jetbrains'
+
+/** VS Code family ids, in preference order. */
+const VSCODE_EDITOR_ORDER = ['vscode', 'vscode-insiders', 'cursor', 'windsurf']
+
+/**
+ * JetBrains products this plugin can launch, in preference order.
+ * `winFolders` match the versioned install-directory names under
+ * `%ProgramFiles%\JetBrains`; `toolbox` prefixes match JetBrains Toolbox app
+ * directories and launcher scripts; `macApps` are the `.app` bundle names;
+ * `linuxPaths` are guessed launcher scripts (PATH names are always appended).
+ */
+const JETBRAINS_PRODUCTS = [
+  {
+    id: 'idea',
+    label: 'IntelliJ IDEA',
+    cli: 'idea',
+    winExe: 'idea64.exe',
+    winFolders: ['IntelliJ IDEA'],
+    toolbox: ['idea-u', 'idea-c', 'intellij idea'],
+    macApps: ['IntelliJ IDEA', 'IntelliJ IDEA CE'],
+    linuxPaths: ['/opt/idea/bin/idea.sh', '/usr/bin/idea', '/snap/bin/intellij-idea-ultimate'],
+  },
+  {
+    id: 'pycharm',
+    label: 'PyCharm',
+    cli: 'pycharm',
+    winExe: 'pycharm64.exe',
+    winFolders: ['PyCharm'],
+    toolbox: ['pycharm', 'py', 'pc'],
+    macApps: ['PyCharm', 'PyCharm CE'],
+    linuxPaths: ['/opt/pycharm/bin/pycharm.sh', '/usr/bin/pycharm'],
+  },
+  {
+    id: 'webstorm',
+    label: 'WebStorm',
+    cli: 'webstorm',
+    winExe: 'webstorm64.exe',
+    winFolders: ['WebStorm'],
+    toolbox: ['webstorm', 'ws'],
+    macApps: ['WebStorm'],
+    linuxPaths: ['/opt/webstorm/bin/webstorm.sh', '/usr/bin/webstorm'],
+  },
+  {
+    id: 'goland',
+    label: 'GoLand',
+    cli: 'goland',
+    winExe: 'goland64.exe',
+    winFolders: ['GoLand'],
+    toolbox: ['goland', 'go'],
+    macApps: ['GoLand'],
+    linuxPaths: ['/opt/goland/bin/goland.sh', '/usr/bin/goland'],
+  },
+  {
+    id: 'clion',
+    label: 'CLion',
+    cli: 'clion',
+    winExe: 'clion64.exe',
+    winFolders: ['CLion'],
+    toolbox: ['clion', 'cl'],
+    macApps: ['CLion'],
+    linuxPaths: ['/opt/clion/bin/clion.sh', '/usr/bin/clion'],
+  },
+  {
+    id: 'phpstorm',
+    label: 'PhpStorm',
+    cli: 'phpstorm',
+    winExe: 'phpstorm64.exe',
+    winFolders: ['PhpStorm'],
+    toolbox: ['phpstorm', 'ps'],
+    macApps: ['PhpStorm'],
+    linuxPaths: ['/opt/phpstorm/bin/phpstorm.sh', '/usr/bin/phpstorm'],
+  },
+  {
+    id: 'rider',
+    label: 'Rider',
+    cli: 'rider',
+    winExe: 'rider64.exe',
+    winFolders: ['Rider'],
+    toolbox: ['rider', 'rd'],
+    macApps: ['Rider'],
+    linuxPaths: ['/opt/rider/bin/rider.sh', '/usr/bin/rider'],
+  },
+  {
+    id: 'rubymine',
+    label: 'RubyMine',
+    cli: 'rubymine',
+    winExe: 'rubymine64.exe',
+    winFolders: ['RubyMine'],
+    toolbox: ['rubymine', 'rm'],
+    macApps: ['RubyMine'],
+    linuxPaths: ['/opt/rubymine/bin/rubymine.sh', '/usr/bin/rubymine'],
+  },
+  {
+    id: 'datagrip',
+    label: 'DataGrip',
+    cli: 'datagrip',
+    winExe: 'datagrip64.exe',
+    winFolders: ['DataGrip'],
+    toolbox: ['datagrip', 'dg'],
+    macApps: ['DataGrip'],
+    linuxPaths: ['/opt/datagrip/bin/datagrip.sh', '/usr/bin/datagrip'],
+  },
+  {
+    id: 'rustrover',
+    label: 'RustRover',
+    cli: 'rustrover',
+    winExe: 'rustrover64.exe',
+    winFolders: ['RustRover'],
+    toolbox: ['rustrover', 'rr'],
+    macApps: ['RustRover'],
+    linuxPaths: ['/opt/rustrover/bin/rustrover.sh', '/usr/bin/rustrover'],
+  },
+]
+
+/** JetBrains ids, in preference order. */
+const JETBRAINS_IDS = JETBRAINS_PRODUCTS.map((product) => product.id)
+/** Every editors id this plugin can launch, in preference order. */
+const EDITOR_ORDER = [...VSCODE_EDITOR_ORDER, ...JETBRAINS_IDS]
 const EDITOR_IDS = new Set(EDITOR_ORDER)
+
 /** Request bodies are tiny JSON objects; anything larger is hostile. */
 const MAX_BODY_BYTES = 64 * 1024
 /** Longest path accepted from the browser. */
@@ -62,6 +188,7 @@ function normalizeConfig(input) {
   const editor = typeof value.editor === 'string' ? value.editor.trim() : ''
   return {
     command: typeof value.command === 'string' ? value.command.trim() : '',
+    commandKind: value.commandKind === KIND_JETBRAINS ? KIND_JETBRAINS : KIND_VSCODE,
     editor: EDITOR_IDS.has(editor) ? editor : DEFAULT_EDITOR,
     extraArgs,
     reuseWindow: value.reuseWindow === true,
@@ -200,12 +327,111 @@ function launchEditor(command, args, options) {
   })
 }
 
+/** Direct child directory names, or [] when the path is not a readable directory. */
+function readDirectories(path) {
+  try {
+    return readdirSync(path, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Windows standalone installs: `%ProgramFiles%\JetBrains\<Product 2024.3>\bin\<exe>`.
+ * The product directory is versioned, so the root is scanned by prefix.
+ */
+function windowsInstallCandidates(root, folders, exe) {
+  const candidates = []
+  for (const name of readDirectories(root)) {
+    const lower = name.toLowerCase()
+    if (!folders.some((prefix) => lower.startsWith(prefix.toLowerCase()))) continue
+    const launch = join(root, name, 'bin', exe)
+    if (existsSync(launch)) candidates.push(launch)
+  }
+  return candidates
+}
+
+/**
+ * JetBrains Toolbox installs:
+ * `%LOCALAPPDATA%\JetBrains\Toolbox\apps\<app>\ch-<n>\<version>\bin\<exe>`.
+ * App directory names vary across Toolbox versions, so prefix matching is used.
+ */
+function toolboxAppCandidates(appsRoot, tokens, exe) {
+  const candidates = []
+  for (const appName of readDirectories(appsRoot)) {
+    const lower = appName.toLowerCase()
+    if (!tokens.some((token) => lower.startsWith(token))) continue
+    for (const channel of readDirectories(join(appsRoot, appName))) {
+      if (!/^ch-\d+$/iu.test(channel)) continue
+      for (const version of readDirectories(join(appsRoot, appName, channel))) {
+        const launch = join(appsRoot, appName, channel, version, 'bin', exe)
+        if (existsSync(launch)) candidates.push(launch)
+      }
+    }
+  }
+  return candidates
+}
+
+/** Candidate launchers for one JetBrains product on this platform. */
+function jetBrainsCandidates(product) {
+  const candidates = []
+  const home = homedir()
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA
+    if (typeof localAppData === 'string' && localAppData !== '') {
+      const toolboxRoot = join(localAppData, 'JetBrains', 'Toolbox')
+      for (const extension of ['cmd', 'bat']) {
+        candidates.push(join(toolboxRoot, 'scripts', `${product.cli}.${extension}`))
+      }
+      candidates.push(
+        ...toolboxAppCandidates(join(toolboxRoot, 'apps'), product.toolbox, product.winExe),
+      )
+    }
+    for (const root of [process.env.ProgramFiles, process.env['ProgramFiles(x86)']]) {
+      if (typeof root !== 'string' || root === '') continue
+      candidates.push(...windowsInstallCandidates(join(root, 'JetBrains'), product.winFolders, product.winExe))
+    }
+    // PATH names last: Toolbox script directories are commonly added to PATH.
+    candidates.push(product.cli, product.winExe.replace(/\.exe$/u, ''))
+    return candidates
+  }
+  if (process.platform === 'darwin') {
+    for (const app of product.macApps) {
+      candidates.push(`/Applications/${app}.app/Contents/MacOS/${product.cli}`)
+      candidates.push(join(home, 'Applications', `${app}.app`, 'Contents', 'MacOS', product.cli))
+    }
+    candidates.push(product.cli)
+    return candidates
+  }
+  // Linux: Toolbox launcher scripts, guessed install paths, then PATH.
+  candidates.push(
+    join(home, '.local', 'share', 'JetBrains', 'Toolbox', 'scripts', product.cli),
+    ...product.linuxPaths,
+    product.cli,
+  )
+  return candidates
+}
+
+/** VS Code family macOS launcher candidates for one bundle spelling. */
+function macVscodeCandidates(appName, cli) {
+  const home = homedir()
+  return [
+    `/Applications/${appName}.app/Contents/Resources/app/bin/${cli}`,
+    join(home, 'Applications', `${appName}.app`, 'Contents', 'Resources', 'app', 'bin', cli),
+  ]
+}
+
 /**
  * Candidate CLIs for one editor id on this platform, in preference order.
  * A bare name at the end of each list is resolved through the composition's
- * PATH, which is the only locator on platforms without fixed install roots.
+ * PATH, which is the last-resort locator.
  */
 function editorCandidates(editor) {
+  const product = JETBRAINS_PRODUCTS.find((entry) => entry.id === editor)
+  if (product !== undefined) return jetBrainsCandidates(product)
+
   const candidates = []
   if (process.platform === 'win32') {
     const roots = [process.env.LOCALAPPDATA, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
@@ -241,24 +467,19 @@ function editorCandidates(editor) {
     }
     return candidates
   }
-  const home = homedir()
-  const macApp = (name, cli) => [
-    `/Applications/${name}.app/Contents/Resources/app/bin/${cli}`,
-    join(home, 'Applications', `${name}.app`, 'Contents', 'Resources', 'app', 'bin', cli),
-  ]
   if (process.platform === 'darwin') {
     switch (editor) {
       case 'vscode':
-        candidates.push(...macApp('Visual Studio Code', 'code'), 'code')
+        candidates.push(...macVscodeCandidates('Visual Studio Code', 'code'), 'code')
         break
       case 'vscode-insiders':
-        candidates.push(...macApp('Visual Studio Code - Insiders', 'code-insiders'), 'code-insiders')
+        candidates.push(...macVscodeCandidates('Visual Studio Code - Insiders', 'code-insiders'), 'code-insiders')
         break
       case 'cursor':
-        candidates.push(...macApp('Cursor', 'cursor'), 'cursor')
+        candidates.push(...macVscodeCandidates('Cursor', 'cursor'), 'cursor')
         break
       case 'windsurf':
-        candidates.push(...macApp('Windsurf', 'windsurf'), 'windsurf')
+        candidates.push(...macVscodeCandidates('Windsurf', 'windsurf'), 'windsurf')
         break
       default:
         break
@@ -298,6 +519,28 @@ async function resolveCandidate(ctx, candidate) {
   }
 }
 
+/** Launcher contract of one editor id. */
+function editorKind(editor) {
+  return JETBRAINS_IDS.includes(editor) ? KIND_JETBRAINS : KIND_VSCODE
+}
+
+function editorLabelOf(editor) {
+  const product = JETBRAINS_PRODUCTS.find((entry) => entry.id === editor)
+  if (product !== undefined) return product.label
+  switch (editor) {
+    case 'vscode':
+      return 'Visual Studio Code'
+    case 'vscode-insiders':
+      return 'VS Code Insiders'
+    case 'cursor':
+      return 'Cursor'
+    case 'windsurf':
+      return 'Windsurf'
+    default:
+      return editor
+  }
+}
+
 /** Resolve one editor id to its launcher on this host, or undefined. */
 async function resolveEditorCommand(ctx, editor) {
   for (const candidate of editorCandidates(editor)) {
@@ -314,14 +557,15 @@ async function resolveEditor(ctx, editor) {
   throw new RouteError(
     502,
     'editor-not-found',
-    `no ${editor} CLI was found on this host; pick another IDE in Settings → General or set config.command`,
+    `no ${editorLabelOf(editor)} launcher was found on this host; pick another IDE in Settings → General or set config.command`,
   )
 }
 
 /**
  * The editor this click launches, with provenance for errors and the response.
- * Precedence: an explicit `command` in the row config, then the IDE chosen in
- * the browser (Settings → General), then the row config `editor`, then VS Code.
+ * Precedence: an explicit `command` in the row config (with its `commandKind`),
+ * then the IDE chosen in the browser (Settings → General), then the row config
+ * `editor`, then VS Code.
  */
 async function resolveLauncher(ctx, config, requestedEditor) {
   if (config.command !== '') {
@@ -329,11 +573,33 @@ async function resolveLauncher(ctx, config, requestedEditor) {
     if (resolved === undefined) {
       throw new RouteError(502, 'editor-not-found', `configured editor command was not found: ${config.command}`)
     }
-    return { command: resolved, configured: true, editor: 'custom' }
+    return { command: resolved, configured: true, editor: 'custom', kind: config.commandKind }
   }
   const editor = requestedEditor ?? config.editor
   const command = await resolveEditor(ctx, editor)
-  return { command, configured: false, editor }
+  return { command, configured: false, editor, kind: editorKind(editor) }
+}
+
+/**
+ * Build the launcher arguments for one editor family.
+ * VS Code family: `--goto <path>:<line>[:<column>]`.
+ * JetBrains family: `--line <line> <path>` (no column support).
+ * A configured `command` follows the same families through `commandKind`.
+ */
+function launchArgs(kind, target, line, column, config) {
+  const args = [...config.extraArgs]
+  if (kind === KIND_JETBRAINS) {
+    if (target.type === 'file' && line !== undefined) args.push('--line', String(line))
+    args.push(target.processPath)
+    return args
+  }
+  if (config.reuseWindow) args.push('--reuse-window')
+  if (target.type === 'file' && line !== undefined) {
+    args.push('--goto', column === undefined ? `${target.processPath}:${line}` : `${target.processPath}:${line}:${column}`)
+  } else {
+    args.push(target.processPath)
+  }
+  return args
 }
 
 /** Resolve the workspace directory a click belongs to. */
@@ -396,8 +662,8 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
-   * Which supported IDEs this host can launch. Probing is cheap (an existence
-   * check plus in-process PATH lookups), so every request reflects installs and
+   * Which supported IDEs this host can launch. Probing is cheap (existence
+   * checks plus in-process PATH lookups), so every request reflects installs and
    * removals without a restart.
    */
   const editorsSnapshot = async () => {
@@ -482,14 +748,7 @@ export function apply(ctx, rawConfig) {
       throw error
     }
 
-    const args = [...config.extraArgs]
-    if (config.reuseWindow) args.push('--reuse-window')
-    if (target.type === 'file' && body.line !== undefined) {
-      args.push('--goto', body.column === undefined ? `${target.processPath}:${body.line}` : `${target.processPath}:${body.line}:${body.column}`)
-    } else {
-      args.push(target.processPath)
-    }
-
+    const args = launchArgs(launcher.kind, target, body.line, body.column, config)
     const startDirectory = target.type === 'directory' ? target.processPath : dirname(target.processPath)
     const cwd = existsSync(startDirectory) ? startDirectory : undefined
     try {
@@ -507,6 +766,7 @@ export function apply(ctx, rawConfig) {
       line: body.line ?? null,
       column: body.column ?? null,
       editor: launcher.editor,
+      kind: launcher.kind,
       launcher: launcher.command,
     })
   }

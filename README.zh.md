@@ -3,11 +3,18 @@
 [English](README.md) | **中文**
 
 点击 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 对话中
-回答里的文件引用，用你选择的 IDE（**默认 Visual Studio Code**）打开对应文件并
-定位到引用的行，替代内置的文档预览。
+回答里的文件引用，用你选择的 IDE（**默认 Visual Studio Code**，也支持 VS Code
+家族与 JetBrains 系列）打开对应文件并定位到引用的行，替代内置的文档预览。
 
 一个 DeepSeek Harness 插件（bundle + 浏览器半）。已在 DeepSeek Harness
 `0.2.1-rc.2`（桌面版 / Web profile）上测试。
+
+支持的编辑器（在宿主机器上自动检测）：
+
+* **VS Code 家族**（`--goto <path>:<line>:<column>`）：Visual Studio Code、
+  VS Code Insiders、Cursor、Windsurf。
+* **JetBrains 家族**（`--line <line> <path>`）：IntelliJ IDEA、PyCharm、
+  WebStorm、GoLand、CLion、PhpStorm、Rider、RubyMine、DataGrip、RustRover。
 
 ## 在界面中的位置
 
@@ -30,6 +37,10 @@
 ## 功能
 
 * **单击**回答中的文件引用 chip，用所选 IDE 打开对应文件并定位到引用的行。
+* **两个编辑器家族**：VS Code / Insiders / Cursor / Windsurf 用 `--goto` 启动；
+  JetBrains（IntelliJ IDEA、PyCharm、WebStorm、GoLand、CLion、PhpStorm、Rider、
+  RubyMine、DataGrip、RustRover）用 `--line <行> <路径>` 启动。浏览器只发送固定
+  集合里的编辑器 id。
 * **设置 → 通用设置 →「打开文件的 IDE」**只列出宿主真正能启动的 IDE（每次请求
   都会扫描已知安装位置和 `PATH`）。默认 VS Code；没有 VS Code 则用扫描到的第一
   个；已保存的选择失效时同样自动回退。
@@ -44,8 +55,10 @@
 * 一个 DeepSeek Harness Web GUI（桌面版或 `web` profile）。宿主组合需要提供
   `webServer`、`connection`、`subprocess`、`fs`、`sessions` 服务；桌面版与 web
   profile 都满足。
-* 至少安装一款受支持的 IDE：**Visual Studio Code**、**VS Code Insiders**、
-  **Cursor**、**Windsurf**。
+* 至少安装一款受支持的 IDE：
+  * **VS Code 家族**：Visual Studio Code、VS Code Insiders、Cursor、Windsurf。
+  * **JetBrains 家族**：IntelliJ IDEA、PyCharm、WebStorm、GoLand、CLion、
+    PhpStorm、Rider、RubyMine、DataGrip、RustRover。
 * 兼容性说明：浏览器半依赖当前聊天 UI 的文件引用 chip 结构（`_fileMention_*`
   按钮，作者路径在 `title` 属性里）。Harness 未来的 UI 改动可能需要适配；提
   issue 时请附上 Harness 版本。
@@ -83,6 +96,7 @@
 * 行号/列号取自 chip 文字末尾的 `:42` / `:42:7`。Harness 只把路径暴露在 DOM 的
   `title` 属性中，所以链接文字是行号的通道。绝对路径和相对工作区的路径都支持，
   相对路径由宿主按 Session 的工作目录解析。
+* 列号只会传给 VS Code 家族启动器；JetBrains 启动器只接收行号。
 * 目录引用会作为工作区文件夹打开。
 
 ## 配置
@@ -100,9 +114,10 @@
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | `command` | `''` | 显式指定编辑器 CLI：PATH 名（`code`）或绝对路径（`...\bin\code.cmd`）。设置后优先于设置页选择；留空则设置页选择生效。 |
-| `editor` | `vscode` | 请求未携带选择时的回退 IDE：`vscode`、`vscode-insiders`、`cursor`、`windsurf`。 |
-| `reuseWindow` | `false` | 追加 `--reuse-window`，在最近窗口打开。VS Code 本身会把文件路由到已打开该目录的窗口。 |
-| `extraArgs` | `[]` | 放在目标参数（`--goto <path>:<line>`）之前的额外参数，例如 `["-n"]`。 |
+| `commandKind` | `vscode` | 配置了 `command` 时使用的启动约定：`vscode`（`--goto`）或 `jetbrains`（`--line`）。`command` 为空时忽略。 |
+| `editor` | `vscode` | 请求未携带选择时的回退 IDE：任意受支持的 id，如 `vscode`、`cursor`、`idea`、`pycharm`、`webstorm`。 |
+| `reuseWindow` | `false` | 追加 `--reuse-window`，在最近窗口打开（仅 VS Code 家族）。VS Code 本身会把文件路由到已打开该目录的窗口。 |
+| `extraArgs` | `[]` | 放在目标参数之前的额外参数，例如 `["-n"]`。 |
 | `launchWatchMs` | `2000` | 分离启动器的早期失败观察窗口；窗口结束时仍在运行的启动器视为启动成功。 |
 
 ## 检测与启动解析
@@ -113,16 +128,25 @@
 * `GET /open-in-ide/editors` —— 每次请求都探测支持的编辑器 id（路径存在性检查 +
   进程内 `PATH` 解析），返回本机能启动哪些。
 * `POST /open-in-ide/open` —— 校验 `{ sessionId, path, line, column, editor }`，
-  按 Session 工作目录解析路径，然后用 `--goto <path>:<line>:<column>` 分离启动
-  所选编辑器，子进程使用凭据清理后的环境。
+  按 Session 工作目录解析路径，然后按家族约定分离启动所选编辑器，子进程使用凭据
+  清理后的环境。
 
 检测顺序：
 
-* **Windows**：`%LOCALAPPDATA%` / `%ProgramFiles%` 下的已知安装目录，然后是
-  `PATH` 上的 CLI 名。即使某台机器上 Cursor 把 `code` 注册成自己的命令，`vscode`
-  id 仍会解析到真正的 VS Code 安装，因为已知目录先于 `PATH` 尝试。
-* **macOS**：`.app` 内的 `Contents/Resources/app/bin/<cli>`，然后是 `PATH`。
-* **Linux**：常见安装路径，然后是 `PATH`。
+* **Windows**：
+  * VS Code 家族：`%LOCALAPPDATA%` / `%ProgramFiles%` 下的已知安装目录，然后是
+    `PATH` 上的 CLI 名。即使 Cursor 把 `code` 注册成自己的命令，`vscode` id 仍会
+    解析到真正的 VS Code 安装，因为已知目录先于 `PATH` 尝试。
+  * JetBrains：Toolbox 启动脚本
+    （`%LOCALAPPDATA%\JetBrains\Toolbox\scripts\<cli>.cmd`）、Toolbox 应用目录
+    （`…\Toolbox\apps\<app>\ch-<n>\<version>\bin\<exe>`）、独立安装
+    （`%ProgramFiles%\JetBrains\<Product 2024.x>\bin\<exe>`），最后是 `PATH`
+    上的 CLI 名。
+* **macOS**：VS Code 家族用 `.app` 内的
+  `Contents/Resources/app/bin/<cli>`；JetBrains 用 `<App>.app/Contents/MacOS/<cli>`；
+  两者都回退到 `PATH`。
+* **Linux**：常见安装路径（`/opt/...`、`/usr/bin/...`、snap 路径）和
+  `~/.local/share/JetBrains` 下的 Toolbox 脚本目录，最后是 `PATH`。
 
 浏览器从不发送命令行：它只发送固定集合里的编辑器 id，宿主把它解析为自己验证过的
 可执行文件。
@@ -131,9 +155,12 @@
 
 * 只重定向内置 Markdown 文件引用 chip。工具调用卡片里的文件名、交付文件卡片和
   文档预览保持各自的打开方式。
-* 受支持的编辑器必须实现 VS Code CLI 约定（`--goto <path>:<line>:<col>`）；四款
-  都是 VS Code 家族。其他编辑器可用 `command` 指定，但必须接受同一约定。
-* 检测只覆盖这四款编辑器；不在 `PATH` 上的便携版或其他编辑器需要 `command`。
+* 支持的编辑器与启动约定：VS Code 家族（`--goto <path>:<line>:<col>`）与
+  JetBrains 家族（`--line <行> <路径>`）。自定义 `command` 必须接受
+  `commandKind` 指定的约定。
+* 检测覆盖上面列出的编辑器 id；不在 `PATH` 上的便携版或列表之外的编辑器需要
+  `command`。
+* 列号只会传给 VS Code 家族；JetBrains 启动器只接收行号。
 * 行号/列号来自可见的 chip 文字；链接文字没有行号时只打开文件、不定位。
 * 编辑器选择按浏览器保存（`localStorage`）；不同浏览器或 origin 各自独立。
 

@@ -4,11 +4,17 @@
 # the IDE picked in Settings → General at the referenced line; Alt-click keeps
 # the shipped in-app preview. The IDE selector stores the choice in the browser.
 #
+# Supported families (auto-detected on the host):
+#   VS Code family (--goto): vscode | vscode-insiders | cursor | windsurf
+#   JetBrains family (--line): idea | pycharm | webstorm | goland | clion |
+#                              phpstorm | rider | rubymine | datagrip | rustrover
+#
 # Override this row in the profile's own cordis.patch.yml to change behavior:
 #
 #   - id: open-in-ide
 #     config:
 #       command: 'C:\Users\me\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd'
+#       commandKind: vscode
 #       reuseWindow: true
 - insert:
     - id: open-in-ide
@@ -17,12 +23,15 @@
         # Explicit editor CLI: a bare PATH name or an absolute path. When set it
         # wins over the Settings selector; empty keeps the selector authoritative.
         command: ''
-        # Fallback IDE when the browser sends no choice: vscode |
-        # vscode-insiders | cursor | windsurf.
+        # Launcher contract for a configured command: vscode (--goto) or
+        # jetbrains (--line). Ignored while command is empty.
+        commandKind: vscode
+        # Fallback IDE when the browser sends no choice; any supported id.
         editor: vscode
-        # Add --reuse-window so the file opens in the most recent window.
+        # Add --reuse-window so the file opens in the most recent window
+        # (VS Code family only).
         reuseWindow: false
-        # Extra arguments placed before the target path/--goto pair.
+        # Extra arguments placed before the target arguments.
         extraArgs: []
         # Early-failure watch window for the detached launcher, in milliseconds.
         launchWatchMs: 2000

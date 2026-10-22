@@ -26,6 +26,16 @@ window.__ModuleLoader__.load({
       { id: 'vscode-insiders', labelKey: 'editor.vscodeInsiders', fallback: 'VS Code Insiders' },
       { id: 'cursor', labelKey: 'editor.cursor', fallback: 'Cursor' },
       { id: 'windsurf', labelKey: 'editor.windsurf', fallback: 'Windsurf' },
+      { id: 'idea', labelKey: 'editor.idea', fallback: 'IntelliJ IDEA' },
+      { id: 'pycharm', labelKey: 'editor.pycharm', fallback: 'PyCharm' },
+      { id: 'webstorm', labelKey: 'editor.webstorm', fallback: 'WebStorm' },
+      { id: 'goland', labelKey: 'editor.goland', fallback: 'GoLand' },
+      { id: 'clion', labelKey: 'editor.clion', fallback: 'CLion' },
+      { id: 'phpstorm', labelKey: 'editor.phpstorm', fallback: 'PhpStorm' },
+      { id: 'rider', labelKey: 'editor.rider', fallback: 'Rider' },
+      { id: 'rubymine', labelKey: 'editor.rubymine', fallback: 'RubyMine' },
+      { id: 'datagrip', labelKey: 'editor.datagrip', fallback: 'DataGrip' },
+      { id: 'rustrover', labelKey: 'editor.rustrover', fallback: 'RustRover' },
     ]
 
     /** Message catalogue for this package's own namespace. */
@@ -36,11 +46,22 @@ window.__ModuleLoader__.load({
       'settings.title': 'IDE for file links',
       'settings.description': 'Which installed IDE opens file references in the conversation. Visual Studio Code by default, otherwise the first detected IDE.',
       'settings.noneShort': 'No IDE detected',
-      'settings.none': 'No supported IDE was found on this machine. Install Visual Studio Code, Cursor, VS Code Insiders, or Windsurf.',
+      'settings.none': 'No supported IDE was found on this machine. Install VS Code, Cursor, Windsurf, or a JetBrains IDE.',
+      'editor.custom': 'Custom (config.command)',
       'editor.vscode': 'Visual Studio Code',
       'editor.vscodeInsiders': 'VS Code Insiders',
       'editor.cursor': 'Cursor',
       'editor.windsurf': 'Windsurf',
+      'editor.idea': 'IntelliJ IDEA',
+      'editor.pycharm': 'PyCharm',
+      'editor.webstorm': 'WebStorm',
+      'editor.goland': 'GoLand',
+      'editor.clion': 'CLion',
+      'editor.phpstorm': 'PhpStorm',
+      'editor.rider': 'Rider',
+      'editor.rubymine': 'RubyMine',
+      'editor.datagrip': 'DataGrip',
+      'editor.rustrover': 'RustRover',
     }
     const ZH = {
       'toast.opening': '正在 {editor} 中打开 {target}…',
@@ -49,11 +70,22 @@ window.__ModuleLoader__.load({
       'settings.title': '打开文件的 IDE',
       'settings.description': '点击对话中的文件引用时用哪个 IDE 打开；默认 Visual Studio Code，没有则用扫描到的第一个。',
       'settings.noneShort': '未检测到 IDE',
-      'settings.none': '本机未扫描到受支持的 IDE，请安装 Visual Studio Code、Cursor、VS Code Insiders 或 Windsurf。',
+      'settings.none': '本机未扫描到受支持的 IDE，请安装 VS Code、Cursor、Windsurf 或 JetBrains 系列 IDE。',
+      'editor.custom': '自定义（config.command）',
       'editor.vscode': 'Visual Studio Code',
       'editor.vscodeInsiders': 'VS Code Insiders',
       'editor.cursor': 'Cursor',
       'editor.windsurf': 'Windsurf',
+      'editor.idea': 'IntelliJ IDEA',
+      'editor.pycharm': 'PyCharm',
+      'editor.webstorm': 'WebStorm',
+      'editor.goland': 'GoLand',
+      'editor.clion': 'CLion',
+      'editor.phpstorm': 'PhpStorm',
+      'editor.rider': 'Rider',
+      'editor.rubymine': 'RubyMine',
+      'editor.datagrip': 'DataGrip',
+      'editor.rustrover': 'RustRover',
     }
 
     /** Package styling; only theme tokens are used so light/dark follow the host. */
@@ -88,7 +120,8 @@ window.__ModuleLoader__.load({
       '.dsh-oii-chevron{flex:none;color:var(--dsw-alias-label-secondary)}',
       // Anchored menu
       '.dsh-oii-menu{position:fixed;z-index:1200;display:flex;flex-direction:column;gap:2px;',
-      'min-width:180px;padding:4px;border:.5px solid var(--dsw-alias-border-l1);',
+      'min-width:180px;max-height:min(420px,calc(100vh - 96px));overflow-y:auto;padding:4px;',
+      'border:.5px solid var(--dsw-alias-border-l1);',
       'border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-overlay);',
       'box-shadow:0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 18%, transparent)}',
       '.dsh-oii-menuItem{display:flex;align-items:center;justify-content:space-between;gap:10px;',
@@ -169,6 +202,10 @@ window.__ModuleLoader__.load({
 
     /** Display name of one editor id, translated when a translator is present. */
     function editorLabel(t, id) {
+      if (id === 'custom') {
+        const custom = translate(t, 'editor.custom')
+        return custom === 'editor.custom' ? 'Custom (config.command)' : custom
+      }
       const entry = EDITORS.find((candidate) => candidate.id === id) ?? EDITORS[0]
       const translated = translate(t, entry.labelKey)
       return translated === entry.labelKey ? entry.fallback : translated

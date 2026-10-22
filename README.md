@@ -3,11 +3,19 @@
 **English** | [中文](README.zh.md)
 
 Open file references from the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
-chat in your IDE — **Visual Studio Code by default** — positioned at the
-referenced line, instead of the in-app document preview.
+chat in your IDE — **Visual Studio Code by default**, or any detected VS Code
+family / JetBrains IDE — positioned at the referenced line, instead of the in-app
+document preview.
 
 A DeepSeek Harness plugin (bundle + browser half). Tested with DeepSeek Harness
 `0.2.1-rc.2` (Desktop / Web profile).
+
+Supported editors, detected on the machine hosting the Harness:
+
+* **VS Code family** (`--goto <path>:<line>:<column>`): Visual Studio Code,
+  VS Code Insiders, Cursor, Windsurf.
+* **JetBrains family** (`--line <line> <path>`): IntelliJ IDEA, PyCharm, WebStorm,
+  GoLand, CLion, PhpStorm, Rider, RubyMine, DataGrip, RustRover.
 
 ## Where to find it
 
@@ -32,6 +40,10 @@ VS Code is not installed.
 
 * **Plain click** on a file-reference chip in an assistant message opens that
   file in the selected IDE at the referenced line.
+* **Two editor families**: VS Code / VS Code Insiders / Cursor / Windsurf are
+  launched with `--goto`; JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm,
+  GoLand, CLion, PhpStorm, Rider, RubyMine, DataGrip, RustRover) with
+  `--line <line> <path>`. The browser only names an editor id from a fixed set.
 * **Settings → General → “IDE for file links”** lists only the IDEs the host can
   actually launch, detected by scanning known install locations and `PATH` on
   every request. The default is Visual Studio Code; when it is not installed the
@@ -49,8 +61,10 @@ VS Code is not installed.
 * A DeepSeek Harness Web GUI (Desktop or a `web` profile). The host composition
   must provide `webServer`, `connection`, `subprocess`, `fs`, and `sessions`;
   the desktop and web profiles do.
-* At least one supported IDE: **Visual Studio Code**, **VS Code Insiders**,
-  **Cursor**, or **Windsurf**.
+* At least one supported IDE:
+  * **VS Code family**: Visual Studio Code, VS Code Insiders, Cursor, Windsurf.
+  * **JetBrains family**: IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion,
+    PhpStorm, Rider, RubyMine, DataGrip, RustRover.
 * Compatibility note: the browser half keys off the shipped chat's
   file-reference chip markup (`_fileMention_*` buttons with the authored path in
   `title`). A future Harness UI change may need an update here; pin or report
@@ -95,6 +109,8 @@ links the checkout, so later edits apply live.
   exposes only the path as a DOM attribute, so the label is the line channel.
   Absolute and workspace-relative paths are both accepted; relative paths
   resolve against the Session's workspace directory on the host.
+* The column (when present) is only forwarded to VS Code-family launchers;
+  JetBrains launchers receive the line only.
 * Directories open as workspace folders.
 
 ## Configuration
@@ -113,9 +129,10 @@ updates):
 | Field | Default | Meaning |
 |---|---|---|
 | `command` | `''` | Explicit editor CLI: a bare PATH name (`code`) or an absolute path (`...\bin\code.cmd`). When set it wins over the Settings selector; empty keeps the selector authoritative. |
-| `editor` | `vscode` | Fallback IDE when a request carries no selection: `vscode`, `vscode-insiders`, `cursor`, `windsurf`. |
-| `reuseWindow` | `false` | Add `--reuse-window` so the file opens in the most recent window. VS Code already routes files into a window that has the containing folder open. |
-| `extraArgs` | `[]` | Extra arguments placed before the target (`--goto <path>:<line>`), e.g. `["-n"]`. |
+| `commandKind` | `vscode` | Launcher contract used for a configured `command`: `vscode` (`--goto`) or `jetbrains` (`--line`). Ignored while `command` is empty. |
+| `editor` | `vscode` | Fallback IDE when a request carries no selection: any supported id, e.g. `vscode`, `cursor`, `idea`, `pycharm`, `webstorm`. |
+| `reuseWindow` | `false` | Add `--reuse-window` so the file opens in the most recent window (VS Code family only). VS Code already routes files into a window that has the containing folder open. |
+| `extraArgs` | `[]` | Extra arguments placed before the target arguments, e.g. `["-n"]`. |
 | `launchWatchMs` | `2000` | Early-failure watch window for the detached launcher; a launcher still running when it closes counts as launched. |
 
 ## Detection and launch resolution
@@ -128,17 +145,27 @@ checks (Host/Origin fence plus browser authentication):
   this host can launch.
 * `POST /open-in-ide/open` — validates `{ sessionId, path, line, column,
   editor }`, resolves the path in the Session's workspace, then launches the
-  selected editor detached with `--goto <path>:<line>:<column>` and a
-  credential-scrubbed environment.
+  selected editor detached with the family's contract and a credential-scrubbed
+  environment.
 
 Detection order:
 
-* **Windows**: known install roots under `%LOCALAPPDATA%` / `%ProgramFiles%`,
-  then the IDE's CLI name on `PATH`. A machine where Cursor registered itself as
-  `code` still resolves the `vscode` id to the real VS Code install, because
-  known roots are tried before `PATH`.
-* **macOS**: the `.app` bundle's `Contents/Resources/app/bin/<cli>`, then `PATH`.
-* **Linux**: well-known install paths, then `PATH`.
+* **Windows**:
+  * VS Code family: known install roots under `%LOCALAPPDATA%` / `%ProgramFiles%`,
+    then the IDE's CLI name on `PATH`. A machine where Cursor registered itself
+    as `code` still resolves the `vscode` id to the real VS Code install,
+    because known roots are tried before `PATH`.
+  * JetBrains: Toolbox launcher scripts
+    (`%LOCALAPPDATA%\JetBrains\Toolbox\scripts\<cli>.cmd`), Toolbox apps
+    (`…\Toolbox\apps\<app>\ch-<n>\<version>\bin\<exe>`), standalone installs
+    (`%ProgramFiles%\JetBrains\<Product 2024.x>\bin\<exe>`), then the CLI name
+    on `PATH`.
+* **macOS**: VS Code family uses the `.app` bundle's
+  `Contents/Resources/app/bin/<cli>`; JetBrains uses
+  `<App>.app/Contents/MacOS/<cli>`. Both fall back to `PATH`.
+* **Linux**: known install paths (`/opt/...`, `/usr/bin/...`, snap paths) and the
+  JetBrains Toolbox scripts directory under `~/.local/share/JetBrains`, then
+  `PATH`.
 
 The browser never sends a command line: it names an editor id from a fixed set,
 and the host resolves it to an executable it verified.
@@ -148,11 +175,14 @@ and the host resolves it to an executable it verified.
 * Only the shipped Markdown file-reference chips are redirected. Tool-call card
   file names, delivered-file cards, and the document preview keep their own
   openers.
-* Supported editors must implement the VS Code CLI contract
-  (`--goto <path>:<line>:<col>`); all four supported editors are VS Code family.
-  Other editors can be pinned with `command`, but must accept the same contract.
-* Detection covers those four editors only. A portable build not on `PATH` or a
-  different editor needs `command`.
+* Supported editors and their launcher contracts: VS Code family
+  (`--goto <path>:<line>:<col>`) and the JetBrains family
+  (`--line <line> <path>`). A custom `command` must accept the contract named by
+  `commandKind`.
+* Detection covers the editor ids listed above. A portable build not on `PATH`,
+  or an editor outside those families, needs `command`.
+* The column (when present) is only forwarded to the VS Code family; JetBrains
+  launchers receive the line only.
 * Line/column come from the visible chip label; when a link's label does not
   repeat the line, the file opens without a line target.
 * The editor choice is per browser (`localStorage`); another browser or origin
