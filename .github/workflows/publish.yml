@@ -1,0 +1,39 @@
+name: Publish Package
+
+# Publishes to npm when a version tag is pushed. Uses npm's OIDC trusted
+# publishing, so no long-lived token or 2FA prompt is involved: npm CLI detects
+# the GitHub Actions identity and exchanges it for a short-lived credential.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write # required for OIDC trusted publishing
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # never cache release builds
+
+      # Trusted publishing needs npm CLI 11.5.1+ (12.x for the current registry).
+      - name: Install latest npm
+        run: npm install --global npm@latest
+
+      - name: Check the package
+        run: |
+          node --check index.js
+          node --check client.js
+          node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
+          npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --access public
