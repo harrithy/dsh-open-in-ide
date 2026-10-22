@@ -23,9 +23,9 @@
  * command line.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 /** Absolute route path; the browser half fetches its document-relative form. */
 const ROUTE_PATH = '/open-in-ide/open'
@@ -157,6 +157,23 @@ const JETBRAINS_IDS = JETBRAINS_PRODUCTS.map((product) => product.id)
 const EDITOR_ORDER = [...VSCODE_EDITOR_ORDER, ...JETBRAINS_IDS]
 const EDITOR_IDS = new Set(EDITOR_ORDER)
 
+/** Windows process names per VS Code-family id, used to raise the IDE window. */
+const EDITOR_WINDOW_PROCESSES = {
+  vscode: ['Code.exe'],
+  'vscode-insiders': ['Code - Insiders.exe'],
+  cursor: ['Cursor.exe'],
+  windsurf: ['Windsurf.exe'],
+}
+/** macOS application names used by `osascript … activate`. */
+const EDITOR_MAC_APPS = {
+  vscode: 'Visual Studio Code',
+  'vscode-insiders': 'Visual Studio Code - Insiders',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+}
+/** Where the Windows focus helper script lives between clicks. */
+const FOCUS_SCRIPT_PATH = join(tmpdir(), 'dsh-open-in-ide-focus.ps1')
+
 /** Request bodies are tiny JSON objects; anything larger is hostile. */
 const MAX_BODY_BYTES = 64 * 1024
 /** Longest path accepted from the browser. */
@@ -185,12 +202,15 @@ function normalizeConfig(input) {
     ? value.extraArgs.filter((entry) => typeof entry === 'string')
     : []
   const watch = Number(value.launchWatchMs)
+  const focusDelay = Number(value.focusDelayMs)
   const editor = typeof value.editor === 'string' ? value.editor.trim() : ''
   return {
     command: typeof value.command === 'string' ? value.command.trim() : '',
     commandKind: value.commandKind === KIND_JETBRAINS ? KIND_JETBRAINS : KIND_VSCODE,
     editor: EDITOR_IDS.has(editor) ? editor : DEFAULT_EDITOR,
     extraArgs,
+    focusDelayMs: Number.isFinite(focusDelay) ? Math.max(0, Math.min(5000, Math.trunc(focusDelay))) : 350,
+    focusWindow: value.focusWindow !== false,
     reuseWindow: value.reuseWindow === true,
     launchWatchMs: Number.isFinite(watch) ? Math.max(250, Math.min(60_000, Math.trunc(watch))) : 2000,
   }
@@ -325,6 +345,310 @@ function launchEditor(command, args, options) {
       else settle(reject, new Error(`editor launcher exited with code ${String(code)}, signal ${String(signal)}`))
     })
   })
+}
+
+/**
+ * Windows helper that raises the editor window. Windows denies foreground
+ * changes to processes without foreground rights (a background host launching
+ * the editor CLI), so the script restores a minimized window, retries with a
+ * synthetic ALT press to unlock the foreground lock, and finally falls back to
+ * `SwitchToThisWindow`. It prints one JSON line.
+ */
+const FOCUS_SCRIPT = String.raw`param(
+  [string]$ProcessNameList = '',
+  [string]$TitleHintList = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public static class DshWindowFocus
+{
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    [DllImport("user32.dll")]
+    public static extern bool SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+    public static List<IntPtr> Handles(IntPtr ignored)
+    {
+        var list = new List<IntPtr>();
+        EnumWindows((hWnd, lParam) => { list.Add(hWnd); return true; }, IntPtr.Zero);
+        return list;
+    }
+
+    public static string TitleOf(IntPtr hWnd)
+    {
+        int length = GetWindowTextLength(hWnd);
+        if (length <= 0) return string.Empty;
+        var buffer = new StringBuilder(length + 1);
+        GetWindowText(hWnd, buffer, buffer.Capacity);
+        return buffer.ToString();
+    }
+
+    public static uint ProcessOf(IntPtr hWnd)
+    {
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        return pid;
+    }
+
+    public static bool Focus(IntPtr hWnd)
+    {
+        if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
+        SetForegroundWindow(hWnd);
+        if (GetForegroundWindow() == hWnd) return true;
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        SetForegroundWindow(hWnd);
+        if (GetForegroundWindow() == hWnd) return true;
+        SwitchToThisWindow(hWnd, true);
+        return GetForegroundWindow() == hWnd;
+    }
+}
+'@
+
+$names = @{}
+foreach ($name in ($ProcessNameList -split ';')) {
+  $trimmed = $name.Trim()
+  if ($trimmed -eq '') { continue }
+  $base = [System.IO.Path]::GetFileNameWithoutExtension($trimmed)
+  Get-Process -Name $base -ErrorAction SilentlyContinue | ForEach-Object { $names[[int]$_.Id] = $true }
+}
+
+$candidates = New-Object System.Collections.ArrayList
+foreach ($handle in [DshWindowFocus]::Handles([IntPtr]::Zero)) {
+  if (-not [DshWindowFocus]::IsWindowVisible($handle)) { continue }
+  $processId = [DshWindowFocus]::ProcessOf($handle)
+  if (-not $names.ContainsKey([int]$processId)) { continue }
+  $title = [DshWindowFocus]::TitleOf($handle)
+  if ([string]::IsNullOrWhiteSpace($title)) { continue }
+  [void]$candidates.Add([pscustomobject]@{ Handle = $handle; Title = $title; ProcessId = [int]$processId })
+}
+
+if ($candidates.Count -eq 0) {
+  Write-Output '{"found":false,"focused":false,"reason":"no-window"}'
+  exit 0
+}
+
+$hints = @()
+foreach ($hint in ($TitleHintList -split '\|')) {
+  $trimmed = $hint.Trim()
+  if ($trimmed -ne '') { $hints += $trimmed.ToLowerInvariant() }
+}
+
+$target = $null
+$bestScore = 0
+foreach ($candidate in $candidates) {
+  $title = $candidate.Title.ToLowerInvariant()
+  $score = 0
+  foreach ($hint in $hints) { if ($title.Contains($hint)) { $score += 1 } }
+  if ($score -gt $bestScore) { $bestScore = $score; $target = $candidate }
+}
+if ($null -eq $target) { $target = $candidates | Select-Object -First 1 }
+
+$focused = [DshWindowFocus]::Focus($target.Handle)
+[pscustomobject]@{
+  found = $true
+  focused = [bool]$focused
+  candidates = $candidates.Count
+  score = $bestScore
+} | ConvertTo-Json -Compress
+`
+
+/** Resolve after `ms` milliseconds. */
+function delay(ms) {
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms)
+  })
+}
+
+/** Run one short helper command, capturing stdout; resolves with exit status. */
+function runHelper(command, args, timeoutMs) {
+  return new Promise((resolvePromise) => {
+    let child
+    try {
+      child = spawn(command, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        env: childEnvironment(),
+      })
+    } catch {
+      resolvePromise({ status: null, stdout: '' })
+      return
+    }
+    let stdout = ''
+    let settled = false
+    const finish = (status) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({ status, stdout })
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill()
+      } catch {
+        /* already gone */
+      }
+      finish(null)
+    }, timeoutMs)
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.on('error', () => finish(null))
+    child.on('exit', (code) => finish(code))
+  })
+}
+
+/** Write the focus helper script once and keep it current. */
+function ensureFocusScript() {
+  try {
+    let current
+    try {
+      current = readFileSync(FOCUS_SCRIPT_PATH, 'utf8')
+    } catch {
+      current = undefined
+    }
+    if (current !== FOCUS_SCRIPT) writeFileSync(FOCUS_SCRIPT_PATH, FOCUS_SCRIPT, 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Parse the helper's last JSON line. */
+function parseFocusResult(stdout) {
+  const lines = String(stdout ?? '').trim().split(/\r?\n/u)
+  const line = lines.filter((entry) => entry.trim().startsWith('{')).pop()
+  if (line === undefined) return undefined
+  try {
+    const parsed = JSON.parse(line)
+    return parsed !== null && typeof parsed === 'object' ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Process names whose windows belong to the selected editor. */
+function windowProcessNames(editor, command) {
+  const known = EDITOR_WINDOW_PROCESSES[editor]
+  if (known !== undefined) return known
+  const product = JETBRAINS_PRODUCTS.find((entry) => entry.id === editor)
+  if (product !== undefined) return [product.winExe]
+  const base = basename(command).toLowerCase()
+  if (base === 'code.cmd' || base === 'code' || base === 'code.exe') return ['Code.exe']
+  if (base === 'code-insiders.cmd' || base === 'code-insiders' || base === 'code-insiders.exe') return ['Code - Insiders.exe']
+  if (base === 'cursor.cmd' || base === 'cursor' || base === 'cursor.exe') return ['Cursor.exe']
+  if (base === 'windsurf.cmd' || base === 'windsurf' || base === 'windsurf.exe') return ['Windsurf.exe']
+  return base.endsWith('.exe') ? [basename(command)] : []
+}
+
+/** macOS application names for one editor id. */
+function editorAppNames(editor) {
+  const known = EDITOR_MAC_APPS[editor]
+  if (known !== undefined) return [known]
+  const product = JETBRAINS_PRODUCTS.find((entry) => entry.id === editor)
+  return product === undefined ? [] : product.macApps
+}
+
+/** Windows: restore and raise the editor window, matching by title hints. */
+async function focusWindowsEditor(editor, command, hints, config) {
+  const names = windowProcessNames(editor, command)
+  if (names.length === 0 || !ensureFocusScript()) return undefined
+  const titleHints = hints.filter((hint) => typeof hint === 'string' && hint !== '').join('|')
+  let seen
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await delay(attempt === 0 ? config.focusDelayMs : 700)
+    const result = await runHelper('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-WindowStyle',
+      'Hidden',
+      '-File',
+      FOCUS_SCRIPT_PATH,
+      '-ProcessNameList',
+      names.join(';'),
+      '-TitleHintList',
+      titleHints,
+    ], 6000)
+    seen = parseFocusResult(result.stdout)
+    if (seen?.focused === true) return true
+    if (seen?.found === true && attempt >= 1) break
+  }
+  return seen?.focused === true
+}
+
+/** macOS: ask the application to activate. */
+async function focusMacEditor(editor) {
+  for (const app of editorAppNames(editor)) {
+    const result = await runHelper('osascript', ['-e', `tell application "${app.replace(/"/g, '\\"')}" to activate`], 3000)
+    if (result.status === 0) return true
+  }
+  return undefined
+}
+
+/** Linux: best-effort raise through the usual window tools. */
+async function focusLinuxEditor(hints) {
+  const hint = hints.find((entry) => typeof entry === 'string' && entry !== '')
+  if (hint === undefined) return undefined
+  const attempts = [
+    ['wmctrl', ['-a', hint]],
+    ['xdotool', ['search', '--name', hint, 'windowactivate']],
+  ]
+  for (const [command, args] of attempts) {
+    const result = await runHelper(command, args, 2500)
+    if (result.status === 0) return true
+  }
+  return undefined
+}
+
+/** Bring the selected editor's window to the foreground after a launch. */
+async function focusEditorWindow(editor, command, hints, config) {
+  try {
+    if (process.platform === 'win32') return await focusWindowsEditor(editor, command, hints, config)
+    if (process.platform === 'darwin') return await focusMacEditor(editor)
+    return await focusLinuxEditor(hints)
+  } catch {
+    return undefined
+  }
 }
 
 /** Direct child directory names, or [] when the path is not a readable directory. */
@@ -759,6 +1083,19 @@ export function apply(ctx, rawConfig) {
       sendJson(res, 502, { ok: false, code: 'launch-failed', message: `failed to launch the editor: ${reason}` })
       return
     }
+
+    // A detached launch from a background host has no foreground rights, so the
+    // editor can open behind the current window. Raise it explicitly.
+    let focused
+    if (config.focusWindow) {
+      const hints = [basename(target.processPath)]
+      if (workspace !== undefined) {
+        const workspaceName = basename(workspace)
+        if (workspaceName !== '' && workspaceName !== hints[0]) hints.push(workspaceName)
+      }
+      focused = await focusEditorWindow(launcher.editor, launcher.command, hints, config)
+    }
+
     sendJson(res, 200, {
       ok: true,
       path: target.processPath,
@@ -768,6 +1105,7 @@ export function apply(ctx, rawConfig) {
       editor: launcher.editor,
       kind: launcher.kind,
       launcher: launcher.command,
+      focused: focused ?? null,
     })
   }
 

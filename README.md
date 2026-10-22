@@ -40,6 +40,10 @@ VS Code is not installed.
 
 * **Plain click** on a file-reference chip in an assistant message opens that
   file in the selected IDE at the referenced line.
+* After opening, the editor window is **brought to the foreground** (and restored
+  if it was minimized). Windows uses a small Win32 helper to defeat the
+  background-process foreground lock; macOS activates via `osascript`; Linux
+  tries `wmctrl`/`xdotool`.
 * **Two editor families**: VS Code / VS Code Insiders / Cursor / Windsurf are
   launched with `--goto`; JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm,
   GoLand, CLion, PhpStorm, Rider, RubyMine, DataGrip, RustRover) with
@@ -132,6 +136,8 @@ updates):
 | `commandKind` | `vscode` | Launcher contract used for a configured `command`: `vscode` (`--goto`) or `jetbrains` (`--line`). Ignored while `command` is empty. |
 | `editor` | `vscode` | Fallback IDE when a request carries no selection: any supported id, e.g. `vscode`, `cursor`, `idea`, `pycharm`, `webstorm`. |
 | `reuseWindow` | `false` | Add `--reuse-window` so the file opens in the most recent window (VS Code family only). VS Code already routes files into a window that has the containing folder open. |
+| `focusWindow` | `true` | Bring the editor window to the foreground after opening it (restore if minimized). Disable to let the OS decide. |
+| `focusDelayMs` | `350` | Delay before the first foreground attempt; when a cold-started editor has no window yet the plugin retries a few times. |
 | `extraArgs` | `[]` | Extra arguments placed before the target arguments, e.g. `["-n"]`. |
 | `launchWatchMs` | `2000` | Early-failure watch window for the detached launcher; a launcher still running when it closes counts as launched. |
 
@@ -183,6 +189,9 @@ and the host resolves it to an executable it verified.
   or an editor outside those families, needs `command`.
 * The column (when present) is only forwarded to the VS Code family; JetBrains
   launchers receive the line only.
+* Window raising is best-effort: Windows uses a Win32 helper (an unusual
+  foreground policy or security tool can still refuse the change), while macOS
+  and Linux depend on `osascript` / `wmctrl` / `xdotool` being available.
 * Line/column come from the visible chip label; when a link's label does not
   repeat the line, the file opens without a line target.
 * The editor choice is per browser (`localStorage`); another browser or origin

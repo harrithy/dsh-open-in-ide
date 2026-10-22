@@ -31,6 +31,13 @@
         # Add --reuse-window so the file opens in the most recent window
         # (VS Code family only).
         reuseWindow: false
+        # Bring the editor window to the foreground after opening it. A
+        # detached launch from the background host has no foreground rights, so
+        # the plugin raises the window explicitly.
+        focusWindow: true
+        # Delay before the first foreground attempt, in milliseconds; retries
+        # follow while a cold-started editor has not created its window yet.
+        focusDelayMs: 350
         # Extra arguments placed before the target arguments.
         extraArgs: []
         # Early-failure watch window for the detached launcher, in milliseconds.

@@ -37,6 +37,9 @@
 ## 功能
 
 * **单击**回答中的文件引用 chip，用所选 IDE 打开对应文件并定位到引用的行。
+* 打开后会把 IDE 窗口**提到最前**（窗口最小化时先恢复）。Windows 通过一个小型
+  Win32 助手绕过“后台进程无前台权限”的限制；macOS 用 `osascript` 激活应用；
+  Linux 尝试 `wmctrl` / `xdotool`。
 * **两个编辑器家族**：VS Code / Insiders / Cursor / Windsurf 用 `--goto` 启动；
   JetBrains（IntelliJ IDEA、PyCharm、WebStorm、GoLand、CLion、PhpStorm、Rider、
   RubyMine、DataGrip、RustRover）用 `--line <行> <路径>` 启动。浏览器只发送固定
@@ -117,6 +120,8 @@
 | `commandKind` | `vscode` | 配置了 `command` 时使用的启动约定：`vscode`（`--goto`）或 `jetbrains`（`--line`）。`command` 为空时忽略。 |
 | `editor` | `vscode` | 请求未携带选择时的回退 IDE：任意受支持的 id，如 `vscode`、`cursor`、`idea`、`pycharm`、`webstorm`。 |
 | `reuseWindow` | `false` | 追加 `--reuse-window`，在最近窗口打开（仅 VS Code 家族）。VS Code 本身会把文件路由到已打开该目录的窗口。 |
+| `focusWindow` | `true` | 打开后把 IDE 窗口提到最前（最小化时先恢复）。设为 false 则交给系统决定。 |
+| `focusDelayMs` | `350` | 首次置前尝试的延迟；冷启动的编辑器窗口还没出现时会自动重试几次。 |
 | `extraArgs` | `[]` | 放在目标参数之前的额外参数，例如 `["-n"]`。 |
 | `launchWatchMs` | `2000` | 分离启动器的早期失败观察窗口；窗口结束时仍在运行的启动器视为启动成功。 |
 
@@ -161,6 +166,8 @@
 * 检测覆盖上面列出的编辑器 id；不在 `PATH` 上的便携版或列表之外的编辑器需要
   `command`。
 * 列号只会传给 VS Code 家族；JetBrains 启动器只接收行号。
+* 置前是尽力而为：Windows 通过 Win32 助手实现（极特殊的前台策略或安全软件仍可能
+  拒绝），macOS/Linux 依赖 `osascript` / `wmctrl` / `xdotool` 是否可用。
 * 行号/列号来自可见的 chip 文字；链接文字没有行号时只打开文件、不定位。
 * 编辑器选择按浏览器保存（`localStorage`）；不同浏览器或 origin 各自独立。
 
