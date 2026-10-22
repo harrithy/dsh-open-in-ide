@@ -4,14 +4,14 @@
   "description": "Open file references from the DeepSeek Harness chat output in your IDE (Visual Studio Code by default), positioned at the referenced line.",
   "type": "module",
   "license": "MIT",
-  "author": "harrio",
+  "author": "harrithy",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/harrio/dsh-open-in-ide.git"
+    "url": "git+https://github.com/harrithy/dsh-open-in-ide.git"
   },
-  "homepage": "https://github.com/harrio/dsh-open-in-ide#readme",
+  "homepage": "https://github.com/harrithy/dsh-open-in-ide#readme",
   "bugs": {
-    "url": "https://github.com/harrio/dsh-open-in-ide/issues"
+    "url": "https://github.com/harrithy/dsh-open-in-ide/issues"
   },
   "keywords": [
     "dsh",

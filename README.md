@@ -49,7 +49,7 @@ local directory install links the checkout, so later edits apply live.
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/harrio/dsh-open-in-ide.git
+   git clone https://github.com/harrithy/dsh-open-in-ide.git
    ```
 
 2. Install the bundle from that directory. In the Harness, either use
