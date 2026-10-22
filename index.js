@@ -26,11 +26,18 @@ import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** Absolute route path; the browser half fetches its document-relative form. */
 const ROUTE_PATH = '/open-in-ide/open'
 /** GET route path serving the IDEs detected on this host. */
 const EDITORS_PATH = '/open-in-ide/editors'
+/** GET/POST route path of the self-updater. */
+const UPDATE_PATH = '/open-in-ide/update'
+/** Directory this plugin was loaded from (a linked checkout or an installed copy). */
+const PLUGIN_DIRECTORY = dirname(fileURLToPath(import.meta.url))
+/** Repository the self-updater is allowed to pull from. */
+const DEFAULT_UPDATE_REPOSITORY = 'https://github.com/harrithy/dsh-open-in-ide.git'
 /** Editor used when neither the request nor the row config names one. */
 const DEFAULT_EDITOR = 'vscode'
 
@@ -229,6 +236,8 @@ function normalizeConfig(input) {
   const markers = Array.isArray(value.projectMarkers)
     ? value.projectMarkers.filter((entry) => typeof entry === 'string' && entry !== '' && !/[\\/]/u.test(entry))
     : []
+  const updateDirectory = typeof value.updateDirectory === 'string' ? value.updateDirectory.trim() : ''
+  const updateRepository = typeof value.updateRepository === 'string' ? value.updateRepository.trim() : ''
   return {
     command: typeof value.command === 'string' ? value.command.trim() : '',
     commandKind: value.commandKind === KIND_JETBRAINS ? KIND_JETBRAINS : KIND_VSCODE,
@@ -239,6 +248,9 @@ function normalizeConfig(input) {
     openProjectFolder: value.openProjectFolder !== false,
     projectMarkers: markers.length > 0 ? markers : DEFAULT_PROJECT_MARKERS,
     reuseWindow: value.reuseWindow === true,
+    updateCheck: value.updateCheck !== false,
+    updateDirectory,
+    updateRepository: updateRepository !== '' ? updateRepository : DEFAULT_UPDATE_REPOSITORY,
     launchWatchMs: Number.isFinite(watch) ? Math.max(250, Math.min(60_000, Math.trunc(watch))) : 2000,
   }
 }
@@ -678,6 +690,219 @@ async function focusEditorWindow(editor, command, hints, config) {
   }
 }
 
+/** Compare repository remotes regardless of URL spelling. */
+function normalizeRepository(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\\/gu, '/')
+    .replace(/\.git$/u, '')
+    .replace(/\/+$/u, '')
+}
+
+/**
+ * Run one git command in `directory`, capturing stdout and stderr.
+ * Credential prompts are disabled so an unauthenticated private remote fails
+ * fast instead of hanging the request.
+ */
+function gitCommand(directory, args, timeoutMs) {
+  return new Promise((resolvePromise) => {
+    let child
+    try {
+      child = spawn('git', ['-C', directory, ...args], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...childEnvironment(), GIT_TERMINAL_PROMPT: '0' },
+      })
+    } catch {
+      resolvePromise({ code: null, stdout: '', stderr: 'git is not available' })
+      return
+    }
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({ code, stdout, stderr })
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill()
+      } catch {
+        /* already gone */
+      }
+      finish(null)
+    }, timeoutMs)
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderr += chunk
+    })
+    child.on('error', () => finish(null))
+    child.on('exit', (code) => finish(code))
+  })
+}
+
+/** Version declared by one directory's package.json. */
+function readPackageVersion(directory) {
+  try {
+    const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
+    return typeof manifest.version === 'string' ? manifest.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Trim a diagnostic for the wire. */
+function shortDiagnostic(text) {
+  return String(text ?? '').trim().slice(0, 600)
+}
+
+/**
+ * Compare the installed checkout with its remote: version, commits behind, and
+ * whether a fast-forward update is safe. Only the configured repository is
+ * trusted; a foreign origin is reported, never pulled.
+ */
+async function updateState(config) {
+  const directory = config.updateDirectory !== '' ? config.updateDirectory : PLUGIN_DIRECTORY
+  const current = readPackageVersion(directory) ?? null
+  const base = { directory, current }
+  if (!existsSync(join(directory, '.git'))) {
+    return { ...base, mode: 'managed', updateAvailable: false, reason: 'not-a-git-checkout' }
+  }
+  const origin = await gitCommand(directory, ['remote', 'get-url', 'origin'], 5000)
+  if (origin.code !== 0) {
+    return { ...base, mode: 'git', updateAvailable: false, reason: 'no-origin' }
+  }
+  const remote = origin.stdout.trim()
+  if (normalizeRepository(remote) !== normalizeRepository(config.updateRepository)) {
+    return {
+      ...base,
+      mode: 'git',
+      updateAvailable: false,
+      trusted: false,
+      origin: remote,
+      expected: config.updateRepository,
+      reason: 'origin-mismatch',
+    }
+  }
+  const branchResult = await gitCommand(directory, ['rev-parse', '--abbrev-ref', 'HEAD'], 5000)
+  const branch = branchResult.code === 0 && branchResult.stdout.trim() !== 'HEAD' ? branchResult.stdout.trim() : 'main'
+  const fetched = await gitCommand(directory, ['fetch', '--quiet', 'origin'], 20_000)
+  if (fetched.code !== 0) {
+    return {
+      ...base,
+      mode: 'git',
+      trusted: true,
+      branch,
+      updateAvailable: false,
+      reason: 'fetch-failed',
+      detail: shortDiagnostic(fetched.stderr || fetched.stdout),
+    }
+  }
+  const remoteRef = `origin/${branch}`
+  const remoteHeadResult = await gitCommand(directory, ['rev-parse', '--verify', '--quiet', remoteRef], 5000)
+  if (remoteHeadResult.code !== 0) {
+    return { ...base, mode: 'git', trusted: true, branch, updateAvailable: false, reason: 'remote-branch-missing' }
+  }
+  const remoteHead = remoteHeadResult.stdout.trim()
+  const behindResult = await gitCommand(directory, ['rev-list', '--count', `HEAD..${remoteRef}`], 5000)
+  const aheadResult = await gitCommand(directory, ['rev-list', '--count', `${remoteRef}..HEAD`], 5000)
+  const behind = Number.parseInt(behindResult.stdout.trim(), 10)
+  const ahead = Number.parseInt(aheadResult.stdout.trim(), 10)
+  const statusResult = await gitCommand(directory, ['status', '--porcelain', '--untracked-files=no'], 5000)
+  const dirty = statusResult.code === 0 && statusResult.stdout.trim() !== ''
+  const manifest = await gitCommand(directory, ['show', `${remoteRef}:package.json`], 5000)
+  let latest = null
+  if (manifest.code === 0) {
+    try {
+      const parsed = JSON.parse(manifest.stdout)
+      latest = typeof parsed.version === 'string' ? parsed.version : null
+    } catch {
+      latest = null
+    }
+  }
+  const safeBehind = Number.isFinite(behind) ? behind : 0
+  const safeAhead = Number.isFinite(ahead) ? ahead : 0
+  return {
+    ...base,
+    mode: 'git',
+    trusted: true,
+    branch,
+    latest,
+    behind: safeBehind,
+    ahead: safeAhead,
+    dirty,
+    updateAvailable: safeBehind > 0,
+    reason: safeBehind > 0 ? undefined : 'up-to-date',
+  }
+}
+
+/**
+ * Fast-forward the checkout and ask HMR to reload this plugin in place.
+ * Refuses to touch a dirty working tree; the reload is scheduled after the
+ * response so the browser hears the outcome first.
+ */
+async function applyUpdate(config, ctx) {
+  const state = await updateState(config)
+  if (state.mode !== 'git') {
+    return { ok: false, applied: false, reason: 'not-a-git-checkout', mode: state.mode, current: state.current }
+  }
+  if (state.trusted === false) {
+    return { ok: false, applied: false, reason: state.reason ?? 'origin-mismatch', current: state.current }
+  }
+  if (state.reason === 'fetch-failed') {
+    return { ok: false, applied: false, reason: 'fetch-failed', detail: state.detail, current: state.current }
+  }
+  if (state.dirty === true) {
+    return { ok: false, applied: false, reason: 'dirty-working-tree', current: state.current, latest: state.latest, behind: state.behind }
+  }
+  if (state.updateAvailable !== true) {
+    return { ok: true, applied: false, reason: 'up-to-date', current: state.current, latest: state.latest }
+  }
+  const pull = await gitCommand(state.directory, ['pull', '--ff-only', 'origin', state.branch], 30_000)
+  if (pull.code !== 0) {
+    return {
+      ok: false,
+      applied: false,
+      reason: 'pull-failed',
+      detail: shortDiagnostic(pull.stderr || pull.stdout),
+      current: state.current,
+      latest: state.latest,
+    }
+  }
+  const installed = readPackageVersion(state.directory) ?? state.latest ?? null
+  const hmr = ctx.get?.('hmr')
+  const reloading = typeof hmr?.reconcileProfile === 'function'
+  if (reloading) {
+    setTimeout(() => {
+      try {
+        const run = typeof hmr.runExclusive === 'function'
+          ? hmr.runExclusive.bind(hmr)
+          : (operation) => operation()
+        Promise.resolve(run(() => hmr.reconcileProfile([]))).catch((error) => {
+          ctx.logger?.warn?.('open-in-ide: reload after update failed: ' + String(error))
+        })
+      } catch (error) {
+        ctx.logger?.warn?.('open-in-ide: reload after update failed: ' + String(error))
+      }
+    }, 600)
+  }
+  return {
+    ok: true,
+    applied: true,
+    current: state.current,
+    latest: installed,
+    behind: state.behind,
+    reloading,
+  }
+}
+
 /** Direct child directory names, or [] when the path is not a readable directory. */
 function readDirectories(path) {
   try {
@@ -1072,6 +1297,38 @@ export function apply(ctx, rawConfig) {
     sendJson(res, 200, { ok: true, editors: await editorsSnapshot() })
   }
 
+  /** GET: update status (fetch included). POST: fast-forward and hot reload. */
+  const updateRoute = async (req, res) => {
+    if (rejected(req, res)) return
+    try {
+      if (req.method === 'GET') {
+        const auto = new URL(req.url ?? '/', 'http://localhost').searchParams.get('auto') === '1'
+        if (auto && !config.updateCheck) {
+          const directory = config.updateDirectory !== '' ? config.updateDirectory : PLUGIN_DIRECTORY
+          sendJson(res, 200, {
+            ok: true,
+            mode: 'disabled',
+            reason: 'disabled',
+            updateAvailable: false,
+            current: readPackageVersion(directory) ?? null,
+          })
+          return
+        }
+        sendJson(res, 200, { ok: true, autoCheck: config.updateCheck, ...(await updateState(config)) })
+        return
+      }
+      if (req.method !== 'POST') {
+        res.statusCode = 405
+        res.setHeader('allow', 'GET, POST')
+        res.end()
+        return
+      }
+      sendJson(res, 200, await applyUpdate(config, ctx))
+    } catch (error) {
+      sendJson(res, 500, { ok: false, reason: 'error', detail: shortDiagnostic(error instanceof Error ? error.message : error) })
+    }
+  }
+
   const open = async (req, res) => {
     if (rejected(req, res)) return
     if (req.method !== 'POST') {
@@ -1183,4 +1440,5 @@ export function apply(ctx, rawConfig) {
 
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: ROUTE_PATH, handler: open }), `open-in-ide: POST ${ROUTE_PATH}`)
   ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: EDITORS_PATH, handler: listEditors }), `open-in-ide: GET ${EDITORS_PATH}`)
+  ctx.effect(() => ctx.webServer.register({ kind: 'exact', path: UPDATE_PATH, handler: updateRoute }), `open-in-ide: GET/POST ${UPDATE_PATH}`)
 }

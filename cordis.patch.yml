@@ -50,3 +50,13 @@
         extraArgs: []
         # Early-failure watch window for the detached launcher, in milliseconds.
         launchWatchMs: 2000
+        # Self-update: check the GitHub repository on page load and let the
+        # "Plugin updates" settings row fast-forward this git checkout and
+        # reload the plugin through HMR. Set false to disable the automatic
+        # check (the row's button still works).
+        updateCheck: true
+        # Repository the updater is allowed to pull from.
+        updateRepository: 'https://github.com/harrithy/dsh-open-in-ide.git'
+        # Override the checkout directory (defaults to this plugin's own
+        # directory; useful for tests or unusual installs):
+        # updateDirectory: 'D:\path\to\dsh-open-in-ide'

@@ -92,6 +92,21 @@
 3. **刷新 Harness 页面**（F5）。Plugin Manager 中会出现 bundle `dsh-open-in-ide`
    和行 `open-in-ide`，通用设置里会出现新的一行（见[在界面中的位置](#在界面中的位置)）。
 
+## 自动更新
+
+当插件是从 **git checkout**（`link:` 安装，见上面的安装步骤）安装时，可以在 Harness
+运行期间自行更新：
+
+* 页面每次加载会检查一次配置的仓库（`updateCheck`，默认开启）；**设置 → 通用设置
+  →「插件更新」** 一行也可以随时手动检查。
+* 远端有新提交时，该行会显示新版本和「更新」按钮。更新会在 checkout 里执行
+  `git pull --ff-only`，然后通过 HMR 就地重载插件，**不需要重启 Harness**。
+* 更新器只信任配置的 `updateRepository` origin；本地有未提交改动、origin 不匹配、
+  或无法快进的历史都会被拒绝。
+* 非 git checkout（tarball、包管理器安装）会如实提示，请通过插件管理器更新。
+
+需要 `PATH` 上有 `git`，并且能访问该仓库。
+
 ## 使用
 
 * 点击回答里的文件引用（如 `src/app.ts:42`），文件会在所选 IDE 中打开并定位到
@@ -128,6 +143,9 @@
 | `projectMarkers` | 内置列表 | 覆盖项目根标记：不带路径分隔符的文件/目录名，例如 `['.git', 'package.json', 'Cargo.toml']`。 |
 | `focusWindow` | `true` | 打开后把 IDE 窗口提到最前（最小化时先恢复）。设为 false 则交给系统决定。 |
 | `focusDelayMs` | `350` | 首次置前尝试的延迟；冷启动的编辑器窗口还没出现时会自动重试几次。 |
+| `updateCheck` | `true` | 每次页面加载检查一次仓库新版本；设置行里的检查按钮不受此开关影响。 |
+| `updateRepository` | 本仓库 GitHub 地址 | 更新器允许 pull 的仓库；origin 不同会被拒绝。 |
+| `updateDirectory` | 插件所在目录 | 要更新的 checkout 目录（默认就是加载本插件的目录）。 |
 | `extraArgs` | `[]` | 放在目标参数之前的额外参数，例如 `["-n"]`。 |
 | `launchWatchMs` | `2000` | 分离启动器的早期失败观察窗口；窗口结束时仍在运行的启动器视为启动成功。 |
 
@@ -176,6 +194,8 @@
   拒绝），macOS/Linux 依赖 `osascript` / `wmctrl` / `xdotool` 是否可用。
 * 项目文件夹注入是启发式且仅用于 VS Code 家族：向上找最近的 `.git`/`.hg` 或
   manifest 标记。JetBrains 保持自己的项目管理，只接收文件/行号，不传文件夹。
+* 自动更新仅适用于 origin 与 `updateRepository` 一致的 git checkout，且需要
+  `git` 和网络；本地有未提交改动时会故意拒绝，先提交或暂存。
 * 行号/列号来自可见的 chip 文字；链接文字没有行号时只打开文件、不定位。
 * 编辑器选择按浏览器保存（`localStorage`）；不同浏览器或 origin 各自独立。
 

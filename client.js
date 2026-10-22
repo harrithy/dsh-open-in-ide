@@ -10,6 +10,7 @@ window.__ModuleLoader__.load({
     /** Document-relative routes the host half registers. */
     const ROUTE = 'open-in-ide/open'
     const EDITORS_ROUTE = 'open-in-ide/editors'
+    const UPDATE_ROUTE = 'open-in-ide/update'
     /** The shipped file-reference chip's CSS-module class (`_fileMention_<hash>`). */
     const MENTION_CLASS = /(?:^|[\s_-])fileMention(?:[\s_-]|$)/
     /** Labels longer than this are not file references. */
@@ -62,6 +63,31 @@ window.__ModuleLoader__.load({
       'editor.rubymine': 'RubyMine',
       'editor.datagrip': 'DataGrip',
       'editor.rustrover': 'RustRover',
+      'update.title': 'Plugin updates',
+      'update.checking': 'Checking GitHub for a newer version…',
+      'update.upToDate': 'Up to date ({current}).',
+      'update.available': 'New version {latest} is available (current {current}).',
+      'update.dirty': 'Update {latest} is available, but the checkout has local changes; commit or stash them first.',
+      'update.managed': 'Installed as a package, not a git checkout; update it from the Plugin Manager. Current {current}.',
+      'update.untrusted': 'The checkout does not point at the expected repository ({expected}); the updater will not pull.',
+      'update.error': 'Could not check for updates: {message}',
+      'update.disabled': 'Automatic update checks are disabled by config. Current {current}.',
+      'update.updating': 'Updating and reloading the plugin…',
+      'update.buttonCheck': 'Check again',
+      'update.buttonChecking': 'Checking…',
+      'update.buttonUpdate': 'Update to {latest}',
+      'update.buttonUpdating': 'Updating…',
+      'update.applied': 'Updated to {latest}; reloading the plugin…',
+      'update.appliedRestart': 'Updated to {latest}; restart Harness to load it.',
+      'update.applyFailed': 'Update failed: {reason}',
+      'update.toast': 'Plugin update {latest} is available (Settings → General → Plugin updates).',
+      'update.reason.dirty-working-tree': 'the checkout has local changes',
+      'update.reason.fetch-failed': 'could not reach the repository',
+      'update.reason.pull-failed': 'git pull failed',
+      'update.reason.not-a-git-checkout': 'not a git checkout',
+      'update.reason.origin-mismatch': 'repository origin mismatch',
+      'update.reason.up-to-date': 'already up to date',
+      'update.reason.error': 'unexpected error',
     }
     const ZH = {
       'toast.opening': '正在 {editor} 中打开 {target}…',
@@ -86,6 +112,31 @@ window.__ModuleLoader__.load({
       'editor.rubymine': 'RubyMine',
       'editor.datagrip': 'DataGrip',
       'editor.rustrover': 'RustRover',
+      'update.title': '插件更新',
+      'update.checking': '正在检查 GitHub 上的新版本…',
+      'update.upToDate': '已是最新版本（{current}）。',
+      'update.available': '发现新版本 {latest}（当前 {current}）。',
+      'update.dirty': '新版本 {latest} 可用，但本地 checkout 有未提交改动；请先提交或暂存。',
+      'update.managed': '当前是包管理器安装（不是 git checkout），请通过插件管理器更新。当前 {current}。',
+      'update.untrusted': '本地 checkout 的 origin 不是预期仓库（{expected}），更新器不会 pull。',
+      'update.error': '检查更新失败：{message}',
+      'update.disabled': '配置里关闭了自动检查更新。当前 {current}。',
+      'update.updating': '正在更新并重载插件…',
+      'update.buttonCheck': '重新检查',
+      'update.buttonChecking': '检查中…',
+      'update.buttonUpdate': '更新到 {latest}',
+      'update.buttonUpdating': '更新中…',
+      'update.applied': '已更新到 {latest}，正在重载插件…',
+      'update.appliedRestart': '已更新到 {latest}，请重启 Harness 使其生效。',
+      'update.applyFailed': '更新失败：{reason}',
+      'update.toast': '插件有新版本 {latest}（设置 → 通用设置 → 插件更新）。',
+      'update.reason.dirty-working-tree': '本地有未提交改动',
+      'update.reason.fetch-failed': '无法访问仓库',
+      'update.reason.pull-failed': 'git pull 失败',
+      'update.reason.not-a-git-checkout': '不是 git checkout',
+      'update.reason.origin-mismatch': '仓库 origin 不匹配',
+      'update.reason.up-to-date': '已是最新',
+      'update.reason.error': '未知错误',
     }
 
     /** Package styling; only theme tokens are used so light/dark follow the host. */
@@ -129,6 +180,7 @@ window.__ModuleLoader__.load({
       'color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;text-align:start;cursor:pointer}',
       '.dsh-oii-menuItem:hover,.dsh-oii-menuItem:focus-visible{background:color-mix(in srgb, var(--dsw-alias-label-primary) 8%, transparent);outline:none}',
       '.dsh-oii-check{flex:none;color:var(--dsw-alias-brand-primary)}',
+      '.dsh-oii-selector:disabled{opacity:.6;cursor:default}',
     ].join('')
 
     /** Insert this package's stylesheet once; returns its remover. */
@@ -272,6 +324,100 @@ window.__ModuleLoader__.load({
         })
     }
 
+    // ── plugin update store ──────────────────────────────────────────────
+
+    /** Self-update state: idle → checking → ready/error, applying during a pull. */
+    const updates = { listeners: new Set(), state: { status: 'idle' } }
+    let updateRequest = null
+
+    function subscribeUpdate(listener) {
+      updates.listeners.add(listener)
+      return () => {
+        updates.listeners.delete(listener)
+      }
+    }
+
+    function readUpdate() {
+      return updates.state
+    }
+
+    function publishUpdate(state) {
+      updates.state = state
+      for (const listener of updates.listeners) listener()
+    }
+
+    /** Ask the host for the update state; `auto` lets the host skip disabled checks. */
+    function fetchUpdateCheck(auto) {
+      const url = auto ? UPDATE_ROUTE + '?auto=1' : UPDATE_ROUTE
+      return fetch(url, { headers: { accept: 'application/json' } }).then(async (response) => {
+        let payload = null
+        try {
+          payload = await response.json()
+        } catch {
+          payload = null
+        }
+        if (!response.ok || payload === null) {
+          const detail = payload !== null && typeof payload.detail === 'string' ? payload.detail : `HTTP ${String(response.status)}`
+          throw new Error(detail)
+        }
+        return payload
+      })
+    }
+
+    /** Check once (deduplicated); returns the settled state. */
+    function requestUpdateCheck(options) {
+      const force = options !== undefined && options.force === true
+      const auto = options !== undefined && options.auto === true
+      if (updateRequest !== null) return updateRequest
+      if (!force && updates.state.status === 'ready') return Promise.resolve(updates.state)
+      publishUpdate({ status: 'checking', data: updates.state.data })
+      updateRequest = fetchUpdateCheck(auto)
+        .then((payload) => {
+          publishUpdate({ status: 'ready', data: payload })
+          return updates.state
+        })
+        .catch((error) => {
+          publishUpdate({
+            status: 'error',
+            message: error instanceof Error ? error.message : String(error),
+            data: updates.state.data,
+          })
+          return updates.state
+        })
+        .finally(() => {
+          updateRequest = null
+        })
+      return updateRequest
+    }
+
+    /** Fast-forward the checkout on the host; the host reloads the plugin itself. */
+    function requestUpdateApply() {
+      if (updates.state.status === 'applying') return Promise.resolve(null)
+      publishUpdate({ status: 'applying', data: updates.state.data })
+      return fetch(UPDATE_ROUTE, { method: 'POST', headers: { accept: 'application/json' } })
+        .then(async (response) => {
+          let payload = null
+          try {
+            payload = await response.json()
+          } catch {
+            payload = null
+          }
+          if (!response.ok || payload === null) {
+            const detail = payload !== null && typeof payload.detail === 'string' ? payload.detail : `HTTP ${String(response.status)}`
+            throw new Error(detail)
+          }
+          return payload
+        })
+        .catch((error) => {
+          publishUpdate({
+            status: 'ready',
+            data: updates.state.data,
+            applyError: error instanceof Error ? error.message : String(error),
+          })
+          return null
+        })
+    }
+
     // ── toast store ──────────────────────────────────────────────────────
 
     const toastListeners = new Set()
@@ -314,6 +460,9 @@ window.__ModuleLoader__.load({
       discovery.listeners.clear()
       discovery.state = { status: 'idle', available: [] }
       discoveryStarted = false
+      updates.listeners.clear()
+      updates.state = { status: 'idle' }
+      updateRequest = null
     }
 
     // ── click target reading ─────────────────────────────────────────────
@@ -566,6 +715,95 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * General-settings row: check the GitHub repository for a newer version and
+     * hot-update the linked checkout, which the host then reloads in place.
+     */
+    function UpdateRow(props) {
+      const t = props.t ?? props.translate
+      const state = React.useSyncExternalStore(subscribeUpdate, readUpdate, readUpdate)
+      React.useEffect(() => {
+        requestUpdateCheck({ auto: true })
+      }, [])
+
+      const data = state.data
+      const checking = state.status === 'checking'
+      const applying = state.status === 'applying'
+      const updateReady = data !== undefined && data.updateAvailable === true && data.dirty !== true
+      const current = data !== undefined && typeof data.current === 'string' ? data.current : '—'
+      const latest = data !== undefined && typeof data.latest === 'string' ? data.latest : ''
+
+      let description
+      if (state.status === 'error') {
+        description = translate(t, 'update.error', { message: state.message ?? '' })
+      } else if (checking || data === undefined) {
+        description = translate(t, 'update.checking')
+      } else if (applying) {
+        description = translate(t, 'update.updating')
+      } else if (data.mode === 'managed' || data.reason === 'not-a-git-checkout') {
+        description = translate(t, 'update.managed', { current })
+      } else if (data.reason === 'disabled') {
+        description = translate(t, 'update.disabled', { current })
+      } else if (data.trusted === false) {
+        description = translate(t, 'update.untrusted', { expected: data.expected ?? '' })
+      } else if (data.reason === 'fetch-failed') {
+        description = translate(t, 'update.error', { message: data.detail ?? translate(t, 'update.reason.fetch-failed') })
+      } else if (data.updateAvailable === true) {
+        description = data.dirty === true
+          ? translate(t, 'update.dirty', { latest, current })
+          : translate(t, 'update.available', { latest, current })
+      } else {
+        description = translate(t, 'update.upToDate', { current })
+      }
+
+      const label = checking
+        ? translate(t, 'update.buttonChecking')
+        : applying
+          ? translate(t, 'update.buttonUpdating')
+          : updateReady
+            ? translate(t, 'update.buttonUpdate', { latest })
+            : translate(t, 'update.buttonCheck')
+
+      const onClick = () => {
+        if (checking || applying) return
+        if (!updateReady) {
+          requestUpdateCheck({ force: true })
+          return
+        }
+        requestUpdateApply().then((payload) => {
+          if (payload === null) {
+            requestUpdateCheck({ force: true })
+            return
+          }
+          if (payload.ok === true && payload.applied === true) {
+            showToast('info', translate(t, payload.reloading === true ? 'update.applied' : 'update.appliedRestart', {
+              latest: typeof payload.latest === 'string' && payload.latest !== '' ? payload.latest : latest,
+            }))
+            if (payload.reloading !== true) requestUpdateCheck({ force: true })
+            return
+          }
+          const reasonKey = 'update.reason.' + String(payload.reason ?? 'error')
+          const translated = translate(t, reasonKey)
+          const reason = translated === reasonKey
+            ? String(payload.detail ?? payload.reason ?? 'error')
+            : translated
+          showToast('error', translate(t, 'update.applyFailed', { reason }))
+          requestUpdateCheck({ force: true })
+        })
+      }
+
+      return h('div', { className: 'dsh-oii-row' },
+        h('div', { className: 'dsh-oii-rowText' },
+          h('div', { className: 'dsh-oii-title' }, translate(t, 'update.title')),
+          h('div', { className: 'dsh-oii-desc' }, description)),
+        h('button', {
+          type: 'button',
+          className: 'dsh-oii-selector',
+          disabled: checking || applying,
+          onClick,
+        }, label))
+    }
+
+    /**
      * Invisible bridge installed with the current Session: a capture-phase click
      * listener that redirects file-reference chips to the selected IDE.
      */
@@ -669,6 +907,31 @@ window.__ModuleLoader__.load({
           locale: NS,
           inject: () => ({ translate: translateNow }),
         }, EditorRow))
+
+        // General settings row: plugin self-update (check GitHub, hot reload).
+        ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+          name: 'settings.general.item',
+          id: 'open-in-ide-update',
+          order: 19,
+          locale: NS,
+          inject: () => ({ translate: translateNow }),
+        }, UpdateRow))
+
+        // Background check once per page load: notice a remote update without
+        // opening Settings, and surface it through a toast.
+        ctx.effect(() => {
+          const timer = setTimeout(() => {
+            requestUpdateCheck({ force: true, auto: true }).then((settled) => {
+              if (settled.status !== 'ready' || settled.data === undefined || settled.data.updateAvailable !== true) return
+              showToast('info', translate(translateNow, 'update.toast', {
+                latest: typeof settled.data.latest === 'string' ? settled.data.latest : '',
+              }))
+            })
+          }, 5000)
+          return () => {
+            clearTimeout(timer)
+          }
+        }, 'open-in-ide: update check timer')
       },
     }
   },

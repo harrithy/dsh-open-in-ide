@@ -105,6 +105,24 @@ links the checkout, so later edits apply live.
    `open-in-ide` appear in Plugin Manager, and a new row appears in
    Settings → General (see [Where to find it](#where-to-find-it)).
 
+## Auto update
+
+When the plugin is installed from a **git checkout** (a `link:` install, as
+described above), it can update itself while Harness keeps running:
+
+* The page checks the configured repository once per load (`updateCheck`,
+  default on), and the **Settings → General → “Plugin updates”** row has a
+  check button at any time.
+* When the remote has new commits the row shows the new version and an
+  **Update** button. Updating runs `git pull --ff-only` in the checkout and then
+  asks HMR to reload the plugin in place — no Harness restart.
+* The updater only trusts the configured `updateRepository` origin. It refuses
+  a dirty working tree, a foreign origin, and non-fast-forward histories.
+* Installs that are not git checkouts (tarball, registry copy) are reported as
+  such; update those through the Plugin Manager.
+
+This needs `git` on `PATH` and network access to the repository.
+
 ## Usage
 
 * Click a file reference such as `src/app.ts:42` in an answer. The file opens in
@@ -145,6 +163,9 @@ updates):
 | `projectMarkers` | built-in list | Override the project-root markers: file or directory names without separators, e.g. `['.git', 'package.json', 'Cargo.toml']`. |
 | `focusWindow` | `true` | Bring the editor window to the foreground after opening it (restore if minimized). Disable to let the OS decide. |
 | `focusDelayMs` | `350` | Delay before the first foreground attempt; when a cold-started editor has no window yet the plugin retries a few times. |
+| `updateCheck` | `true` | Check the repository for a newer version once per page load. The settings row's check button works regardless. |
+| `updateRepository` | this GitHub URL | Repository the updater is allowed to pull from; a different origin is refused. |
+| `updateDirectory` | plugin directory | Checkout directory to update (defaults to the directory this plugin was loaded from). |
 | `extraArgs` | `[]` | Extra arguments placed before the target arguments, e.g. `["-n"]`. |
 | `launchWatchMs` | `2000` | Early-failure watch window for the detached launcher; a launcher still running when it closes counts as launched. |
 
@@ -202,6 +223,9 @@ and the host resolves it to an executable it verified.
 * Project-folder injection is heuristic and VS Code-family only: it walks up to
   the nearest `.git`/`.hg` or manifest marker. JetBrains IDEs keep their own
   project management and receive only the file/line; no folder is passed.
+* Self-update only works for git checkouts whose origin matches
+  `updateRepository`, and requires `git` plus network access. Local uncommitted
+  changes block it on purpose; commit or stash them first.
 * Line/column come from the visible chip label; when a link's label does not
   repeat the line, the file opens without a line target.
 * The editor choice is per browser (`localStorage`); another browser or origin
