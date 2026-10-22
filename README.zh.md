@@ -1,5 +1,8 @@
 # dsh-open-in-ide
 
+[![npm version](https://img.shields.io/npm/v/dsh-open-in-ide)](https://www.npmjs.com/package/dsh-open-in-ide)
+[![license](https://img.shields.io/npm/l/dsh-open-in-ide)](LICENSE)
+
 [English](README.md) | **中文**
 
 点击 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 对话中
@@ -72,8 +75,23 @@
 
 ## 安装
 
-本插件是标准 DSH bundle，通过 Plugin Manager（设置 → 插件）或 `plugin_manager`
-工具安装。本地目录安装会把源码目录链接进 profile，改代码即时生效。
+插件已发布到 npm：[`dsh-open-in-ide`](https://www.npmjs.com/package/dsh-open-in-ide)，
+是标准 DSH bundle，通过 Plugin Manager（设置 → 插件）或 `plugin_manager` 工具安装。
+
+### 从 npm 安装（最简单）
+
+在 Harness 里按名字安装：**设置 → 插件 → 安装**，spec 填 `dsh-open-in-ide`；或让
+agent 用 `plugin_manager` 工具执行 `action: install_bundle`，`target: "dsh-open-in-ide"`。
+也可以用 profile 的包管理器：
+
+```bash
+dsh plugin --profile <profile> add dsh-open-in-ide
+```
+
+### 从 git checkout 安装（支持自动热更新）
+
+本地目录安装会把源码目录链接进 profile，所以插件可以从 GitHub 自动热更新，改代码
+也即时生效。
 
 1. 克隆仓库：
 
@@ -91,6 +109,9 @@
 
 3. **刷新 Harness 页面**（F5）。Plugin Manager 中会出现 bundle `dsh-open-in-ide`
    和行 `open-in-ide`，通用设置里会出现新的一行（见[在界面中的位置](#在界面中的位置)）。
+
+两种安装功能相同，只有「自动更新」不同：git checkout 会从 GitHub 拉取并就地重载，
+npm 安装则通过插件管理器升级。
 
 ## 自动更新
 

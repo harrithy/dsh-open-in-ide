@@ -1,5 +1,8 @@
 # dsh-open-in-ide
 
+[![npm version](https://img.shields.io/npm/v/dsh-open-in-ide)](https://www.npmjs.com/package/dsh-open-in-ide)
+[![license](https://img.shields.io/npm/l/dsh-open-in-ide)](LICENSE)
+
 **English** | [中文](README.zh.md)
 
 Open file references from the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
@@ -81,9 +84,26 @@ VS Code is not installed.
 
 ## Install
 
-The plugin is a standard DSH bundle, installed through the Plugin Manager
-(Settings → Plugins) or the `plugin_manager` tool. A local directory install
-links the checkout, so later edits apply live.
+The plugin is published on npm as
+[`dsh-open-in-ide`](https://www.npmjs.com/package/dsh-open-in-ide) and is a
+standard DSH bundle, installed through the Plugin Manager (Settings → Plugins)
+or the `plugin_manager` tool.
+
+### From npm (easiest)
+
+In the Harness, install the bundle by name. Either use
+**Settings → Plugins → install** with the spec `dsh-open-in-ide`, or ask the
+agent to run the `plugin_manager` tool with `action: install_bundle` and
+`target: "dsh-open-in-ide"`. The profile package manager can also do it:
+
+```bash
+dsh plugin --profile <profile> add dsh-open-in-ide
+```
+
+### From a git checkout (enables self-update)
+
+A local checkout install links the directory, so the plugin can update itself
+from GitHub hot, and later edits apply live.
 
 1. Clone the repository:
 
@@ -104,6 +124,10 @@ links the checkout, so later edits apply live.
 3. **Reload the Harness page** (`F5`). The bundle `dsh-open-in-ide` and row
    `open-in-ide` appear in Plugin Manager, and a new row appears in
    Settings → General (see [Where to find it](#where-to-find-it)).
+
+Both installs get the same features; only the self-updater follows the install
+kind: a linked checkout pulls from GitHub and reloads in place, while an npm
+install is updated from the Plugin Manager.
 
 ## Auto update
 

@@ -67,6 +67,7 @@ window.__ModuleLoader__.load({
       'update.checking': 'Checking GitHub for a newer version…',
       'update.upToDate': 'Up to date ({current}).',
       'update.available': 'New version {latest} is available (current {current}).',
+      'update.availableCommits': 'The remote has new commits (version {current}, {behind} behind).',
       'update.dirty': 'Update {latest} is available, but the checkout has local changes; commit or stash them first.',
       'update.managed': 'Installed as a package, not a git checkout; update it from the Plugin Manager. Current {current}.',
       'update.untrusted': 'The checkout does not point at the expected repository ({expected}); the updater will not pull.',
@@ -76,6 +77,7 @@ window.__ModuleLoader__.load({
       'update.buttonCheck': 'Check again',
       'update.buttonChecking': 'Checking…',
       'update.buttonUpdate': 'Update to {latest}',
+      'update.buttonUpdateCommits': 'Update ({behind} commits)',
       'update.buttonUpdating': 'Updating…',
       'update.applied': 'Updated to {latest}; reloading the plugin…',
       'update.appliedRestart': 'Updated to {latest}; restart Harness to load it.',
@@ -116,6 +118,7 @@ window.__ModuleLoader__.load({
       'update.checking': '正在检查 GitHub 上的新版本…',
       'update.upToDate': '已是最新版本（{current}）。',
       'update.available': '发现新版本 {latest}（当前 {current}）。',
+      'update.availableCommits': '远端有新提交（当前版本 {current}，落后 {behind} 个）。',
       'update.dirty': '新版本 {latest} 可用，但本地 checkout 有未提交改动；请先提交或暂存。',
       'update.managed': '当前是包管理器安装（不是 git checkout），请通过插件管理器更新。当前 {current}。',
       'update.untrusted': '本地 checkout 的 origin 不是预期仓库（{expected}），更新器不会 pull。',
@@ -125,6 +128,7 @@ window.__ModuleLoader__.load({
       'update.buttonCheck': '重新检查',
       'update.buttonChecking': '检查中…',
       'update.buttonUpdate': '更新到 {latest}',
+      'update.buttonUpdateCommits': '更新（{behind} 个提交）',
       'update.buttonUpdating': '更新中…',
       'update.applied': '已更新到 {latest}，正在重载插件…',
       'update.appliedRestart': '已更新到 {latest}，请重启 Harness 使其生效。',
@@ -731,6 +735,9 @@ window.__ModuleLoader__.load({
       const updateReady = data !== undefined && data.updateAvailable === true && data.dirty !== true
       const current = data !== undefined && typeof data.current === 'string' ? data.current : '—'
       const latest = data !== undefined && typeof data.latest === 'string' ? data.latest : ''
+      // A docs-only or otherwise unbumped commit still counts as an update.
+      const sameVersion = latest === '' || latest === current
+      const behind = data !== undefined && typeof data.behind === 'number' ? String(data.behind) : ''
 
       let description
       if (state.status === 'error') {
@@ -748,9 +755,13 @@ window.__ModuleLoader__.load({
       } else if (data.reason === 'fetch-failed') {
         description = translate(t, 'update.error', { message: data.detail ?? translate(t, 'update.reason.fetch-failed') })
       } else if (data.updateAvailable === true) {
-        description = data.dirty === true
-          ? translate(t, 'update.dirty', { latest, current })
-          : translate(t, 'update.available', { latest, current })
+        if (data.dirty === true) {
+          description = translate(t, 'update.dirty', { latest: sameVersion ? current : latest, current })
+        } else if (sameVersion) {
+          description = translate(t, 'update.availableCommits', { behind, current })
+        } else {
+          description = translate(t, 'update.available', { latest, current })
+        }
       } else {
         description = translate(t, 'update.upToDate', { current })
       }
@@ -760,7 +771,9 @@ window.__ModuleLoader__.load({
         : applying
           ? translate(t, 'update.buttonUpdating')
           : updateReady
-            ? translate(t, 'update.buttonUpdate', { latest })
+            ? sameVersion
+              ? translate(t, 'update.buttonUpdateCommits', { behind })
+              : translate(t, 'update.buttonUpdate', { latest })
             : translate(t, 'update.buttonCheck')
 
       const onClick = () => {
