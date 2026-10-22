@@ -1,5 +1,7 @@
 # dsh-open-in-ide
 
+**English** | [中文](README.zh.md)
+
 Open file references from the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
 chat in your IDE — **Visual Studio Code by default** — positioned at the
 referenced line, instead of the in-app document preview.
@@ -7,10 +9,24 @@ referenced line, instead of the in-app document preview.
 A DeepSeek Harness plugin (bundle + browser half). Tested with DeepSeek Harness
 `0.2.1-rc.2` (Desktop / Web profile).
 
-> 中文简介：点击对话里回答中的文件引用，用你在「通用设置」中选择的 IDE（默认
-> VS Code，没装则用扫描到的第一个）打开对应文件并定位到行；按住 Alt 点击仍使用
-> 内置预览。插件会自动扫描本机已安装的 VS Code / VS Code Insiders / Cursor /
-> Windsurf，只列出能真正启动的。
+## Where to find it
+
+After installing the bundle, reload the Harness page once.
+
+### 1. Enable it — Settings → Plugins → Installed plugins (已安装插件)
+
+![The plugin listed on the Plugins page](docs/plugins-installed.png)
+
+The bundle appears as **“Open File Links in Your IDE”** (Chinese UI:
+“在 IDE 中打开文件链接”) with its on/off switch.
+
+### 2. Choose your IDE — Settings → General → “IDE for file links” (打开文件的 IDE)
+
+![The IDE selector in General settings](docs/settings-general.png)
+
+The row lists only the IDEs detected on the machine hosting the Harness;
+**Visual Studio Code is the default**, and the first detected IDE is used when
+VS Code is not installed.
 
 ## Features
 
@@ -43,8 +59,8 @@ A DeepSeek Harness plugin (bundle + browser half). Tested with DeepSeek Harness
 ## Install
 
 The plugin is a standard DSH bundle, installed through the Plugin Manager
-(Settings → Plugins) or the `plugin_manager` tool. Install this directory — a
-local directory install links the checkout, so later edits apply live.
+(Settings → Plugins) or the `plugin_manager` tool. A local directory install
+links the checkout, so later edits apply live.
 
 1. Clone the repository:
 
@@ -64,7 +80,7 @@ local directory install links the checkout, so later edits apply live.
 
 3. **Reload the Harness page** (`F5`). The bundle `dsh-open-in-ide` and row
    `open-in-ide` appear in Plugin Manager, and a new row appears in
-   Settings → General.
+   Settings → General (see [Where to find it](#where-to-find-it)).
 
 ## Usage
 
@@ -133,7 +149,7 @@ and the host resolves it to an executable it verified.
   file names, delivered-file cards, and the document preview keep their own
   openers.
 * Supported editors must implement the VS Code CLI contract
-  (`--goto <path>:<line>:<col>`); all four listed editors are VS Code family.
+  (`--goto <path>:<line>:<col>`); all four supported editors are VS Code family.
   Other editors can be pinned with `command`, but must accept the same contract.
 * Detection covers those four editors only. A portable build not on `PATH` or a
   different editor needs `command`.
@@ -150,6 +166,7 @@ client.js              Browser half: settings row, click bridge, toasts
 cordis.patch.yml       Bundle row declaration + defaults
 locale/{en,zh}.json    Plugin Manager title/description
 icon.svg               Plugin artwork
+docs/                  Screenshots used by this README
 ```
 
 There is no build step: `index.js` is loaded by the Loader, `client.js` is served
