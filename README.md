@@ -271,6 +271,12 @@ to the browser as the package's `./client` export. A local directory install is
 linked into the profile, so editing either file takes effect through HMR (client
 immediately; host after the plugin row reloads).
 
+## Releases
+
+Pushing a `v*` tag publishes the version in `package.json` to npm from GitHub
+Actions (`.github/workflows/publish.yml`) through OIDC trusted publishing — no
+token or 2FA prompt involved.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

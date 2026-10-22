@@ -235,6 +235,12 @@ docs/                  本 README 使用的截图
 提供给浏览器。本地目录安装会链接进 profile，因此修改文件可通过 HMR 生效（浏览器
 半立即生效；宿主半在插件行重载后生效）。
 
+## 发布
+
+推送 `v*` tag 后，GitHub Actions（`.github/workflows/publish.yml`）会把
+`package.json` 里的版本发布到 npm，使用 OIDC Trusted Publishing，不需要 token 或
+2FA 验证。
+
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。

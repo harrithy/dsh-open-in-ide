@@ -24,16 +24,14 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false # never cache release builds
 
-      # Trusted publishing needs npm CLI 11.5.1+ (12.x for the current registry).
-      - name: Install latest npm
-        run: npm install --global npm@latest
-
+      # Trusted publishing needs npm CLI 11.5.1+ (the current registry expects
+      # 12.x). Run it through npx so the runner keeps its system npm untouched.
       - name: Check the package
         run: |
           node --check index.js
           node --check client.js
           node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
-          npm pack --dry-run
+          npx --yes npm@latest pack --dry-run
 
       - name: Publish
-        run: npm publish --access public
+        run: npx --yes npm@latest publish --access public
