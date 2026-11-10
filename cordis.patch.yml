@@ -59,6 +59,11 @@
         updateCheck: true
         # Repository the updater is allowed to pull from.
         updateRepository: 'https://github.com/harrithy/dsh-open-in-ide.git'
+        # Registry queried for the latest published version when this plugin was
+        # installed through the Plugin Manager (a git checkout is compared with
+        # its repository instead). The row then points at the Plugin Manager for
+        # the actual update; it never installs anything itself.
+        updateRegistry: 'https://registry.npmjs.org'
         # Override the checkout directory (defaults to this plugin's own
         # directory; useful for tests or unusual installs):
         # updateDirectory: 'D:\path\to\dsh-open-in-ide'

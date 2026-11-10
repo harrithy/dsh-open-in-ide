@@ -64,12 +64,16 @@ window.__ModuleLoader__.load({
       'editor.datagrip': 'DataGrip',
       'editor.rustrover': 'RustRover',
       'update.title': 'Plugin updates',
-      'update.checking': 'Checking GitHub for a newer version…',
+      'update.checking': 'Checking for a newer version…',
       'update.upToDate': 'Up to date ({current}).',
       'update.available': 'New version {latest} is available (current {current}).',
       'update.availableCommits': 'The remote has new commits (version {current}, {behind} behind).',
       'update.dirty': 'Update {latest} is available, but the checkout has local changes; commit or stash them first.',
       'update.managed': 'Installed as a package, not a git checkout; update it from the Plugin Manager. Current {current}.',
+      'update.managedAvailable': 'New version {latest} is available on npm (current {current}). Update it from the Plugin Manager.',
+      'update.managedUpToDate': 'Installed by the Plugin Manager; {current} is the latest npm version.',
+      'update.managedFailed': 'Installed by the Plugin Manager; could not check the npm registry ({message}). Current {current}.',
+      'update.managedToast': 'Plugin update {latest} is available; update it from Settings → Plugins.',
       'update.untrusted': 'The checkout does not point at the expected repository ({expected}); the updater will not pull.',
       'update.error': 'Could not check for updates: {message}',
       'update.disabled': 'Automatic update checks are disabled by config. Current {current}.',
@@ -86,6 +90,7 @@ window.__ModuleLoader__.load({
       'update.reason.dirty-working-tree': 'the checkout has local changes',
       'update.reason.fetch-failed': 'could not reach the repository',
       'update.reason.pull-failed': 'git pull failed',
+      'update.reason.registry-failed': 'could not reach the npm registry',
       'update.reason.not-a-git-checkout': 'not a git checkout',
       'update.reason.origin-mismatch': 'repository origin mismatch',
       'update.reason.up-to-date': 'already up to date',
@@ -115,12 +120,16 @@ window.__ModuleLoader__.load({
       'editor.datagrip': 'DataGrip',
       'editor.rustrover': 'RustRover',
       'update.title': '插件更新',
-      'update.checking': '正在检查 GitHub 上的新版本…',
+      'update.checking': '正在检查新版本…',
       'update.upToDate': '已是最新版本（{current}）。',
       'update.available': '发现新版本 {latest}（当前 {current}）。',
       'update.availableCommits': '远端有新提交（当前版本 {current}，落后 {behind} 个）。',
       'update.dirty': '新版本 {latest} 可用，但本地 checkout 有未提交改动；请先提交或暂存。',
       'update.managed': '当前是包管理器安装（不是 git checkout），请通过插件管理器更新。当前 {current}。',
+      'update.managedAvailable': 'npm 上有新版本 {latest}（当前 {current}），请在插件管理器里更新。',
+      'update.managedUpToDate': '当前是插件管理器安装的包，{current} 已是 npm 上的最新版本。',
+      'update.managedFailed': '当前是插件管理器安装的包，检查 npm 失败（{message}）。当前 {current}。',
+      'update.managedToast': '插件有新版本 {latest}，请在 设置 → 插件 中更新。',
       'update.untrusted': '本地 checkout 的 origin 不是预期仓库（{expected}），更新器不会 pull。',
       'update.error': '检查更新失败：{message}',
       'update.disabled': '配置里关闭了自动检查更新。当前 {current}。',
@@ -137,6 +146,7 @@ window.__ModuleLoader__.load({
       'update.reason.dirty-working-tree': '本地有未提交改动',
       'update.reason.fetch-failed': '无法访问仓库',
       'update.reason.pull-failed': 'git pull 失败',
+      'update.reason.registry-failed': '无法访问 npm registry',
       'update.reason.not-a-git-checkout': '不是 git checkout',
       'update.reason.origin-mismatch': '仓库 origin 不匹配',
       'update.reason.up-to-date': '已是最新',
@@ -747,8 +757,10 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * General-settings row: check the GitHub repository for a newer version and
-     * hot-update the linked checkout, which the host then reloads in place.
+     * General-settings row: check for a newer version. A linked git checkout is
+     * compared with its repository and can be hot-updated here; a package
+     * install is compared with the npm registry and updated from the Plugin
+     * Manager.
      */
     function UpdateRow(props) {
       const t = props.t ?? props.translate
@@ -760,7 +772,11 @@ window.__ModuleLoader__.load({
       const data = state.data
       const checking = state.status === 'checking'
       const applying = state.status === 'applying'
-      const updateReady = data !== undefined && data.updateAvailable === true && data.dirty !== true
+      // Only a git checkout can be fast-forwarded from this row.
+      const updateReady = data !== undefined
+        && data.mode === 'git'
+        && data.updateAvailable === true
+        && data.dirty !== true
       const current = data !== undefined && typeof data.current === 'string' ? data.current : '—'
       const latest = data !== undefined && typeof data.latest === 'string' ? data.latest : ''
       // A docs-only or otherwise unbumped commit still counts as an update.
@@ -774,10 +790,26 @@ window.__ModuleLoader__.load({
         description = translate(t, 'update.checking')
       } else if (applying) {
         description = translate(t, 'update.updating')
-      } else if (data.mode === 'managed' || data.reason === 'not-a-git-checkout') {
-        description = translate(t, 'update.managed', { current })
       } else if (data.reason === 'disabled') {
         description = translate(t, 'update.disabled', { current })
+      } else if (data.mode === 'managed' || data.reason === 'not-a-git-checkout') {
+        if (data.updateAvailable === true) {
+          description = translate(t, 'update.managedAvailable', {
+            latest: sameVersion ? current : latest,
+            current,
+          })
+        } else if (data.reason === 'registry-failed') {
+          description = translate(t, 'update.managedFailed', {
+            message: typeof data.detail === 'string' && data.detail !== ''
+              ? data.detail
+              : translate(t, 'update.reason.registry-failed'),
+            current,
+          })
+        } else if (latest !== '') {
+          description = translate(t, 'update.managedUpToDate', { current })
+        } else {
+          description = translate(t, 'update.managed', { current })
+        }
       } else if (data.trusted === false) {
         description = translate(t, 'update.untrusted', { expected: data.expected ?? '' })
       } else if (data.reason === 'fetch-failed') {
@@ -958,13 +990,14 @@ window.__ModuleLoader__.load({
           inject: () => ({ translate: translateNow }),
         }, UpdateRow))
 
-        // Background check once per page load: notice a remote update without
+        // Background check once per page load: notice a newer version without
         // opening Settings, and surface it through a toast.
         ctx.effect(() => {
           const timer = setTimeout(() => {
             requestUpdateCheck({ force: true, auto: true }).then((settled) => {
               if (settled.status !== 'ready' || settled.data === undefined || settled.data.updateAvailable !== true) return
-              showToast('info', translate(translateNow, 'update.toast', {
+              const key = settled.data.mode === 'managed' ? 'update.managedToast' : 'update.toast'
+              showToast('info', translate(translateNow, key, {
                 latest: typeof settled.data.latest === 'string' ? settled.data.latest : '',
               }))
             })

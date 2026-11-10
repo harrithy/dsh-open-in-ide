@@ -38,6 +38,14 @@ const UPDATE_PATH = '/open-in-ide/update'
 const PLUGIN_DIRECTORY = dirname(fileURLToPath(import.meta.url))
 /** Repository the self-updater is allowed to pull from. */
 const DEFAULT_UPDATE_REPOSITORY = 'https://github.com/harrithy/dsh-open-in-ide.git'
+/** Registry queried for the latest published version of a managed install. */
+const DEFAULT_UPDATE_REGISTRY = 'https://registry.npmjs.org'
+/** How long one registry answer is reused, in milliseconds. */
+const REGISTRY_CACHE_MS = 10 * 60 * 1000
+/** How long a failed registry lookup is reused before a retry. */
+const REGISTRY_FAILURE_CACHE_MS = 60 * 1000
+/** Timeout of one registry request, in milliseconds. */
+const REGISTRY_TIMEOUT_MS = 5000
 /** Editor used when neither the request nor the row config names one. */
 const DEFAULT_EDITOR = 'vscode'
 
@@ -238,6 +246,7 @@ function normalizeConfig(input) {
     : []
   const updateDirectory = typeof value.updateDirectory === 'string' ? value.updateDirectory.trim() : ''
   const updateRepository = typeof value.updateRepository === 'string' ? value.updateRepository.trim() : ''
+  const updateRegistry = typeof value.updateRegistry === 'string' ? value.updateRegistry.trim() : ''
   return {
     command: typeof value.command === 'string' ? value.command.trim() : '',
     commandKind: value.commandKind === KIND_JETBRAINS ? KIND_JETBRAINS : KIND_VSCODE,
@@ -250,6 +259,7 @@ function normalizeConfig(input) {
     reuseWindow: value.reuseWindow === true,
     updateCheck: value.updateCheck !== false,
     updateDirectory,
+    updateRegistry: updateRegistry !== '' ? updateRegistry : DEFAULT_UPDATE_REGISTRY,
     updateRepository: updateRepository !== '' ? updateRepository : DEFAULT_UPDATE_REPOSITORY,
     launchWatchMs: Number.isFinite(watch) ? Math.max(250, Math.min(60_000, Math.trunc(watch))) : 2000,
   }
@@ -1039,14 +1049,20 @@ function gitCommand(directory, args, timeoutMs) {
   })
 }
 
-/** Version declared by one directory's package.json. */
-function readPackageVersion(directory) {
+/** Parsed package.json of one directory, or undefined when it is unreadable. */
+function readPackageManifest(directory) {
   try {
     const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
-    return typeof manifest.version === 'string' ? manifest.version : undefined
+    return typeof manifest === 'object' && manifest !== null ? manifest : undefined
   } catch {
     return undefined
   }
+}
+
+/** Version declared by one directory's package.json. */
+function readPackageVersion(directory) {
+  const manifest = readPackageManifest(directory)
+  return typeof manifest?.version === 'string' ? manifest.version : undefined
 }
 
 /** Trim a diagnostic for the wire. */
@@ -1055,16 +1071,138 @@ function shortDiagnostic(text) {
 }
 
 /**
- * Compare the installed checkout with its remote: version, commits behind, and
- * whether a fast-forward update is safe. Only the configured repository is
- * trusted; a foreign origin is reported, never pulled.
+ * Split a semantic version into its numeric core and prerelease identifiers;
+ * undefined for anything that is not a dotted numeric version.
  */
-async function updateState(config) {
+function parseVersion(value) {
+  if (typeof value !== 'string') return undefined
+  const cleaned = value.trim().replace(/^v/iu, '').split('+', 1)[0]
+  if (cleaned === '') return undefined
+  const dash = cleaned.indexOf('-')
+  const core = dash === -1 ? cleaned : cleaned.slice(0, dash)
+  const prerelease = dash === -1 ? [] : cleaned.slice(dash + 1).split('.')
+  const numbers = core.split('.').map((part) => (/^\d+$/u.test(part) ? Number.parseInt(part, 10) : Number.NaN))
+  if (numbers.length === 0 || numbers.some((part) => !Number.isSafeInteger(part) || part < 0)) return undefined
+  return { numbers, prerelease }
+}
+
+/**
+ * Compare two semantic versions: a positive number when `left` is newer, a
+ * negative one when older, 0 when equal (or when either side is unparseable,
+ * so a surprising registry value never claims an update).
+ */
+function compareVersions(left, right) {
+  const a = parseVersion(left)
+  const b = parseVersion(right)
+  if (a === undefined || b === undefined) return 0
+  const length = Math.max(a.numbers.length, b.numbers.length)
+  for (let index = 0; index < length; index += 1) {
+    const difference = (a.numbers[index] ?? 0) - (b.numbers[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  const leftPre = a.prerelease
+  const rightPre = b.prerelease
+  if (leftPre.length === 0 && rightPre.length === 0) return 0
+  if (leftPre.length === 0) return 1
+  if (rightPre.length === 0) return -1
+  const count = Math.max(leftPre.length, rightPre.length)
+  for (let index = 0; index < count; index += 1) {
+    const leftPart = leftPre[index]
+    const rightPart = rightPre[index]
+    if (leftPart === undefined) return -1
+    if (rightPart === undefined) return 1
+    const leftNumber = /^\d+$/u.test(leftPart) ? Number.parseInt(leftPart, 10) : undefined
+    const rightNumber = /^\d+$/u.test(rightPart) ? Number.parseInt(rightPart, 10) : undefined
+    if (leftNumber !== undefined && rightNumber !== undefined) {
+      if (leftNumber !== rightNumber) return leftNumber - rightNumber
+      continue
+    }
+    if (leftNumber !== undefined) return -1
+    if (rightNumber !== undefined) return 1
+    if (leftPart !== rightPart) return leftPart < rightPart ? -1 : 1
+  }
+  return 0
+}
+
+/** Registry answers by `registry\nname`, so a page-load check costs one request. */
+const registryCache = new Map()
+
+/**
+ * Latest published version of `name` from the configured npm registry. A
+ * failed lookup is cached briefly so a re-rendering row does not hammer the
+ * registry; a manual check (`fresh`) bypasses the cache.
+ */
+async function registryLatest(config, name, fresh) {
+  const registry = String(config.updateRegistry).replace(/\/+$/u, '')
+  const key = `${registry}\n${name}`
+  const cached = registryCache.get(key)
+  if (fresh !== true && cached !== undefined) {
+    const ttl = cached.ok === true ? REGISTRY_CACHE_MS : REGISTRY_FAILURE_CACHE_MS
+    if (Date.now() - cached.at < ttl) return cached
+  }
+  const encoded = name.split('/').map((part) => encodeURIComponent(part)).join('/')
+  const url = `${registry}/${encoded}/latest`
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), REGISTRY_TIMEOUT_MS)
+  let result
+  try {
+    const response = await fetch(url, { headers: { accept: 'application/json' }, signal: abort.signal })
+    if (!response.ok) throw new Error(`registry answered HTTP ${response.status}`)
+    const payload = await response.json()
+    if (typeof payload?.version !== 'string' || payload.version === '') {
+      throw new Error('registry response has no version')
+    }
+    result = { ok: true, at: Date.now(), latest: payload.version, registry }
+  } catch (error) {
+    result = {
+      ok: false,
+      at: Date.now(),
+      registry,
+      detail: shortDiagnostic(error instanceof Error ? error.message : error),
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+  registryCache.set(key, result)
+  return result
+}
+
+/**
+ * Update status of this plugin. A git checkout is compared with its remote:
+ * version, commits behind, and whether a fast-forward update is safe; only the
+ * configured repository is trusted, a foreign origin is reported, never pulled.
+ * A package-manager install is compared with the configured npm registry, so
+ * the row can still announce a newer published version (the Plugin Manager
+ * performs that update).
+ */
+async function updateState(config, options = {}) {
   const directory = config.updateDirectory !== '' ? config.updateDirectory : PLUGIN_DIRECTORY
-  const current = readPackageVersion(directory) ?? null
+  const manifest = readPackageManifest(directory)
+  const current = typeof manifest?.version === 'string' ? manifest.version : null
   const base = { directory, current }
   if (!existsSync(join(directory, '.git'))) {
-    return { ...base, mode: 'managed', updateAvailable: false, reason: 'not-a-git-checkout' }
+    const name = typeof manifest?.name === 'string' ? manifest.name : ''
+    if (name === '') return { ...base, mode: 'managed', updateAvailable: false, reason: 'not-a-git-checkout' }
+    const found = await registryLatest(config, name, options.fresh === true)
+    if (found.ok !== true) {
+      return {
+        ...base,
+        mode: 'managed',
+        updateAvailable: false,
+        reason: 'registry-failed',
+        registry: found.registry,
+        detail: found.detail,
+      }
+    }
+    const updateAvailable = current !== null && compareVersions(found.latest, current) > 0
+    return {
+      ...base,
+      mode: 'managed',
+      latest: found.latest,
+      registry: found.registry,
+      updateAvailable,
+      reason: updateAvailable ? undefined : 'up-to-date',
+    }
   }
   const origin = await gitCommand(directory, ['remote', 'get-url', 'origin'], 5000)
   if (origin.code !== 0) {
@@ -1108,11 +1246,11 @@ async function updateState(config) {
   const ahead = Number.parseInt(aheadResult.stdout.trim(), 10)
   const statusResult = await gitCommand(directory, ['status', '--porcelain', '--untracked-files=no'], 5000)
   const dirty = statusResult.code === 0 && statusResult.stdout.trim() !== ''
-  const manifest = await gitCommand(directory, ['show', `${remoteRef}:package.json`], 5000)
+  const remoteManifest = await gitCommand(directory, ['show', `${remoteRef}:package.json`], 5000)
   let latest = null
-  if (manifest.code === 0) {
+  if (remoteManifest.code === 0) {
     try {
-      const parsed = JSON.parse(manifest.stdout)
+      const parsed = JSON.parse(remoteManifest.stdout)
       latest = typeof parsed.version === 'string' ? parsed.version : null
     } catch {
       latest = null
@@ -1140,6 +1278,18 @@ async function updateState(config) {
  * response so the browser hears the outcome first.
  */
 async function applyUpdate(config, ctx) {
+  // A managed install is updated by the Plugin Manager; skip the git work (and
+  // the registry lookup) entirely.
+  const directory = config.updateDirectory !== '' ? config.updateDirectory : PLUGIN_DIRECTORY
+  if (!existsSync(join(directory, '.git'))) {
+    return {
+      ok: false,
+      applied: false,
+      reason: 'not-a-git-checkout',
+      mode: 'managed',
+      current: readPackageVersion(directory) ?? null,
+    }
+  }
   const state = await updateState(config)
   if (state.mode !== 'git') {
     return { ok: false, applied: false, reason: 'not-a-git-checkout', mode: state.mode, current: state.current }
@@ -1609,7 +1759,11 @@ export function apply(ctx, rawConfig) {
           })
           return
         }
-        sendJson(res, 200, { ok: true, autoCheck: config.updateCheck, ...(await updateState(config)) })
+        sendJson(res, 200, {
+          ok: true,
+          autoCheck: config.updateCheck,
+          ...(await updateState(config, { fresh: auto !== true })),
+        })
         return
       }
       if (req.method !== 'POST') {
