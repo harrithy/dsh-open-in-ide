@@ -490,7 +490,7 @@ window.__ModuleLoader__.load({
      * Read the path and optional position a chip stands for.
      * The shipped chip keeps the authored path in `title` (its click closure
      * holds the destination's `#L<n>` line, which React does not expose to the
-     * DOM); the visible label usually repeats `:line` or `:line:column`.
+     * DOM), so the visible label is the position channel.
      */
     function targetOf(button) {
       const title = (button.getAttribute('title') ?? '').trim()
@@ -504,20 +504,48 @@ window.__ModuleLoader__.load({
       return { path, ...positionOf(label) }
     }
 
-    /** Parse a trailing `#L12`, `:12`, or `:12:4` from the visible label. */
+    /**
+     * Parse a line (and optional column) out of a chip's visible label.
+     *
+     * The Harness exposes only the path as a DOM attribute; the destination's
+     * `#L<n>` fragment lives in the click closure, which React keeps out of the
+     * DOM, so the label text is the only position channel. Models write that
+     * position in several shapes: `file.ts:12`, `file.ts:12:4`, `#L12`, a
+     * `:12-20` / `:12–20` range, or a prose label such as `第 12 行` or
+     * `line 12`. A range keeps its first line, the line an editor's goto takes.
+     */
     function positionOf(label) {
       if (label.length === 0 || label.length > MAX_LABEL_LENGTH) return {}
-      const range = /#L(\d+)(?:-L?\d+)?$/.exec(label)
-      if (range !== null) {
-        const line = Number(range[1])
-        return line > 0 ? { line } : {}
+      /** A positive safe integer, or undefined for any other spelling. */
+      const lineOf = (value) => {
+        const line = Number(value)
+        return Number.isSafeInteger(line) && line > 0 ? line : undefined
       }
-      const position = /:(\d+)(?::(\d+))?$/.exec(label)
-      if (position !== null) {
-        const line = Number(position[1])
-        if (!(line > 0)) return {}
-        const column = position[2] === undefined ? undefined : Number(position[2])
-        return column !== undefined && column > 0 ? { line, column } : { line }
+      // Markdown destination fragment: `#L12`, `#L12-L20`.
+      const fragment = /#L(\d+)(?:-L?\d+)?$/u.exec(label)
+      if (fragment !== null) {
+        const line = lineOf(fragment[1])
+        return line === undefined ? {} : { line }
+      }
+      // Prose label in Chinese: `第 12 行`, `第 12–20 行`, `第 12 行起`.
+      const chinese = /第\s*(\d+)\s*(?:[-–—~～至到]\s*\d+\s*)?行(?:起)?\s*[)）]?$/u.exec(label)
+      if (chinese !== null) {
+        const line = lineOf(chinese[1])
+        return line === undefined ? {} : { line }
+      }
+      // Prose label in English: `line 12`, `lines 12–20`.
+      const english = /(?:^|[\s(（])lines?\s*(\d+)(?:\s*[-–—~～至到]\s*\d+)?\s*[)）]?$/iu.exec(label)
+      if (english !== null) {
+        const line = lineOf(english[1])
+        return line === undefined ? {} : { line }
+      }
+      // Trailing position suffix: `:12`, `:12:4`, `:12-20`, `：12`.
+      const suffix = /[::：](\d+)(?:\s*[-–—~～]\s*\d+)?(?::(\d+))?$/u.exec(label)
+      if (suffix !== null) {
+        const line = lineOf(suffix[1])
+        if (line === undefined) return {}
+        const column = lineOf(suffix[2] ?? '')
+        return column === undefined ? { line } : { line, column }
       }
       return {}
     }
