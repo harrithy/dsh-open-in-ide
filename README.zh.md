@@ -126,9 +126,14 @@ npm 安装则通过插件管理器升级。
   `git pull --ff-only`，然后通过 HMR 就地重载插件，**不需要重启 Harness**。
 * 更新器只信任配置的 `updateRepository` origin；本地有未提交改动、origin 不匹配、
   或无法快进的历史都会被拒绝。
-* 非 git checkout（tarball、包管理器安装）会如实提示，请通过插件管理器更新。
 
-需要 `PATH` 上有 `git`，并且能访问该仓库。
+**包管理器安装**不能用这种方式 pull，但同一行仍会提示 npm 上的新版本：宿主按
+`updateRegistry`（默认 `https://registry.npmjs.org`）查询该包的 `latest` 版本并与
+已安装版本比较，发现更新时提示去**插件管理器**升级；页面加载时的后台检查也会 toast
+一次。插件本身不会安装任何东西。
+
+git checkout 更新需要 `PATH` 上有 `git` 且能访问仓库；包更新提示需要能访问 npm
+registry。
 
 ## 使用
 
@@ -169,6 +174,7 @@ npm 安装则通过插件管理器升级。
 | `focusDelayMs` | `0` | Windows 置前助手开始找窗口前的额外延迟（毫秒）。助手自身会轮询最多约 3 秒，所以冷启动不需要额外重试。 |
 | `updateCheck` | `true` | 每次页面加载检查一次仓库新版本；设置行里的检查按钮不受此开关影响。 |
 | `updateRepository` | 本仓库 GitHub 地址 | 更新器允许 pull 的仓库；origin 不同会被拒绝。 |
+| `updateRegistry` | `https://registry.npmjs.org` | 包管理器安装时查询最新发布版本所用的 registry。 |
 | `updateDirectory` | 插件所在目录 | 要更新的 checkout 目录（默认就是加载本插件的目录）。 |
 | `extraArgs` | `[]` | 放在目标参数之前的额外参数，例如 `["-n"]`。 |
 | `launchWatchMs` | `2000` | 分离启动器的早期失败观察窗口；窗口结束时仍在运行的启动器视为启动成功。 |

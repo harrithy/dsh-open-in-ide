@@ -145,10 +145,16 @@ described above), it can update itself while Harness keeps running:
   asks HMR to reload the plugin in place — no Harness restart.
 * The updater only trusts the configured `updateRepository` origin. It refuses
   a dirty working tree, a foreign origin, and non-fast-forward histories.
-* Installs that are not git checkouts (tarball, registry copy) are reported as
-  such; update those through the Plugin Manager.
 
-This needs `git` on `PATH` and network access to the repository.
+A **package-manager install** cannot be pulled this way, but the same row still
+announces a newer published version: the host asks the configured npm registry
+(`updateRegistry`, default `https://registry.npmjs.org`) for the package's
+`latest` version and compares it with the installed one. The row then points at
+the **Plugin Manager** for the actual update, and the page-load check raises the
+same notice as a toast; the plugin never installs packages itself.
+
+Checkout updates need `git` on `PATH` and network access to the repository;
+package-update notices need network access to the registry.
 
 ## Usage
 
@@ -194,6 +200,7 @@ updates):
 | `focusDelayMs` | `0` | Extra delay before the Windows helper starts looking for the editor window, in milliseconds. The helper then polls until the window appears (up to ~3 s), so a cold-started editor is raised as soon as its window exists. |
 | `updateCheck` | `true` | Check the repository for a newer version once per page load. The settings row's check button works regardless. |
 | `updateRepository` | this GitHub URL | Repository the updater is allowed to pull from; a different origin is refused. |
+| `updateRegistry` | `https://registry.npmjs.org` | Registry queried for a package-manager install's latest published version. |
 | `updateDirectory` | plugin directory | Checkout directory to update (defaults to the directory this plugin was loaded from). |
 | `extraArgs` | `[]` | Extra arguments placed before the target arguments, e.g. `["-n"]`. |
 | `launchWatchMs` | `2000` | Early-failure watch window for the detached launcher; a launcher still running when it closes counts as launched. |
