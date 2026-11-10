@@ -560,6 +560,23 @@ window.__ModuleLoader__.load({
       return {}
     }
 
+    /**
+     * Read the changed-files card button behind a click. A finished turn's
+     * edited-files card keeps each file's resolved path in the hidden node its
+     * button points at with `aria-describedby`; the fold toggle and the
+     * multi-file header point at no such node and keep their review behavior.
+     */
+    function changedFileOf(node) {
+      const element = node !== null && typeof node === 'object' && node.nodeType === 1 ? node : null
+      const button = element?.closest?.('button') ?? null
+      if (button === null) return null
+      if (button.closest('[data-changed-files]') === null) return null
+      const describedBy = button.getAttribute('aria-describedby')
+      if (describedBy === null) return null
+      const path = (document.getElementById(describedBy)?.textContent ?? '').trim()
+      return path === '' ? null : { path }
+    }
+
     /** Short human label for a toast: base name plus the requested line. */
     function displayTarget(target) {
       const name = target.path.split(/[\\/]/).pop() || target.path
@@ -878,7 +895,8 @@ window.__ModuleLoader__.load({
 
     /**
      * Invisible bridge installed with the current Session: a capture-phase click
-     * listener that redirects file-reference chips to the selected IDE.
+     * listener that redirects file-reference chips, and the rows of a finished
+     * turn's edited-files card, to the selected IDE.
      */
     function LinkBridge(props) {
       const sessionId = props.sessionId
@@ -895,17 +913,8 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         ensureDiscovery()
-        const onClick = (event) => {
-          if (event.defaultPrevented) return
-          if (event.button !== 0) return
-          // Modified clicks keep the shipped behavior (in-app preview).
-          if (event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return
-          const button = mentionButtonOf(event.target)
-          if (button === null) return
-          const target = targetOf(button)
-          if (target === null) return
-          event.preventDefault()
-          event.stopPropagation()
+        /** Send one file target to the host, with a toast for the outcome. */
+        const openTarget = (target) => {
           const { sessionId: session, cwd: workspace, t: translateNow, editor: editorId } = latest.current
           const display = displayTarget(target)
           const editorName = editorLabel(translateNow, editorId)
@@ -939,6 +948,23 @@ window.__ModuleLoader__.load({
             const message = error instanceof Error ? error.message : String(error)
             showToast('error', translate(translateNow, 'toast.failed', { editor: editorName, message }))
           })
+        }
+        const onClick = (event) => {
+          if (event.defaultPrevented) return
+          if (event.button !== 0) return
+          // Modified clicks keep the shipped behavior (in-app preview / review).
+          if (event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return
+          const changed = changedFileOf(event.target)
+          let target = changed
+          if (target === null) {
+            const button = mentionButtonOf(event.target)
+            if (button === null) return
+            target = targetOf(button)
+            if (target === null) return
+          }
+          event.preventDefault()
+          event.stopPropagation()
+          openTarget(target)
         }
         document.addEventListener('click', onClick, true)
         return () => {

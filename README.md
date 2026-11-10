@@ -43,6 +43,9 @@ VS Code is not installed.
 
 * **Plain click** on a file-reference chip in an assistant message opens that
   file in the selected IDE at the referenced line.
+* A plain click on a row of the finished turn's **edited-files card** opens that
+  changed file in the selected IDE too. The card's header and its fold control
+  keep opening the turn's review in the right Sidebar.
 * **The file's project opens with it.** For the VS Code family the host finds the
   nearest project root (`.git`/`.hg`, else `package.json`, `Cargo.toml`,
   `pom.xml`, …) and passes it as a folder argument, so VS Code opens or reuses
@@ -65,7 +68,8 @@ VS Code is not installed.
   first detected IDE is used, and a saved choice that is no longer installed is
   reconciled the same way.
 * Clicking a **directory** reference opens it as a workspace folder.
-* **Alt / Shift / Ctrl + click** keeps the shipped in-app preview.
+* **Alt / Shift / Ctrl + click** keeps the shipped behavior: the in-app preview
+  for a file reference, the review tab for an edited-files row.
 * A toast names the target and the IDE, including failures (missing file,
   uninstalled editor, launch error).
 * No build step, no dependencies, no telemetry. The browser half ships as the
@@ -262,9 +266,10 @@ and the host resolves it to an executable it verified.
 
 ## Limits
 
-* Only the shipped Markdown file-reference chips are redirected. Tool-call card
-  file names, delivered-file cards, and the document preview keep their own
-  openers.
+* Only the shipped Markdown file-reference chips and the rows of a finished
+  turn's edited-files card are redirected; the card's header and fold control
+  still open the review, and tool-call card file names, delivered-file cards, and
+  the document preview keep their own openers.
 * Supported editors and their launcher contracts: VS Code family
   (`--goto <path>:<line>:<col>`) and the JetBrains family
   (`--line <line> <path>`). A custom `command` must accept the contract named by
