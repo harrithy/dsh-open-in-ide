@@ -24,7 +24,7 @@ Supported editors, detected on the machine hosting the Harness:
 
 After installing the bundle, reload the Harness page once.
 
-### 1. Enable it — Settings → Plugins → Installed plugins (已安装插件)
+### 1. Enable it — Plugins page → Installed (已安装)
 
 ![The plugin listed on the Plugins page](docs/plugins-installed.png)
 
@@ -89,14 +89,34 @@ VS Code is not installed.
 
 The plugin is published on npm as
 [`dsh-open-in-ide`](https://www.npmjs.com/package/dsh-open-in-ide) and is a
-standard DSH bundle, installed through the Plugin Manager (Settings → Plugins)
-or the `plugin_manager` tool.
+standard DSH bundle, installed through the Plugin Manager (the **Plugins** page
+in the left sidebar) or the `plugin_manager` tool.
+
+### Through the Plugin Manager
+
+The Plugin Manager is the Harness's **Plugins** page in the left sidebar. Open
+it, choose **+ Add plugin**, and paste one of: the npm package name
+(`dsh-open-in-ide`), this repository's URL
+(`https://github.com/harrithy/dsh-open-in-ide`), or the absolute path of a local
+checkout.
+
+![The Plugins entry in the left sidebar](docs/plugins-sidebar.png)
+
+![The Plugins page with its Add plugin button](docs/plugins-add.png)
+
+![The Add plugin dialog with this repository's URL](docs/plugins-add-dialog.png)
+
+The dialog also picks the install source (for example the mainland-China
+mirror). Only use sources you trust: as the dialog warns, a plugin runs with the
+Harness user's permissions. The two install kinds below differ only in how it is
+updated later — a local checkout path installs as `link:` and self-updates from
+GitHub; the npm package name is updated from this same Plugins page.
 
 ### From npm (easiest)
 
-In the Harness, install the bundle by name. Either use
-**Settings → Plugins → install** with the spec `dsh-open-in-ide`, or ask the
-agent to run the `plugin_manager` tool with `action: install_bundle` and
+In the Harness, install the bundle by name. Either use **+ Add plugin** on the
+Plugins page (see above) with the spec `dsh-open-in-ide`, or ask the agent to run
+the `plugin_manager` tool with `action: install_bundle` and
 `target: "dsh-open-in-ide"`. The profile package manager can also do it:
 
 ```bash
@@ -114,23 +134,23 @@ from GitHub hot, and later edits apply live.
    git clone https://github.com/harrithy/dsh-open-in-ide.git
    ```
 
-2. Install the bundle from that directory. In the Harness, either use
-   **Settings → Plugins → install**, or ask the agent to run the
-   `plugin_manager` tool with `action: install_bundle` and this absolute
-   directory as `target`. A `link:` install from the profile's package manager
-   works too:
+2. Install the bundle from that directory. In the Harness, paste the absolute
+   directory path into **+ Add plugin** on the Plugins page (see above), or ask
+   the agent to run the `plugin_manager` tool with `action: install_bundle` and
+   this absolute directory as `target`. A `link:` install from the profile's
+   package manager works too:
 
    ```bash
    dsh plugin --profile <profile> add link:/path/to/dsh-open-in-ide
    ```
 
 3. **Reload the Harness page** (`F5`). The bundle `dsh-open-in-ide` and row
-   `open-in-ide` appear in Plugin Manager, and a new row appears in
+   `open-in-ide` appear on the Plugins page, and a new row appears in
    Settings → General (see [Where to find it](#where-to-find-it)).
 
 Both installs get the same features; only the self-updater follows the install
 kind: a linked checkout pulls from GitHub and reloads in place, while an npm
-install is updated from the Plugin Manager.
+install is updated from the Plugins page.
 
 ## Auto update
 
@@ -150,7 +170,7 @@ A **package-manager install** cannot be pulled this way, but the same row still
 announces a newer published version: the host asks the configured npm registry
 (`updateRegistry`, default `https://registry.npmjs.org`) for the package's
 `latest` version and compares it with the installed one. The row then points at
-the **Plugin Manager** for the actual update, and the page-load check raises the
+the **Plugins** page for the actual update, and the page-load check raises the
 same notice as a toast; the plugin never installs packages itself.
 
 Checkout updates need `git` on `PATH` and network access to the repository;

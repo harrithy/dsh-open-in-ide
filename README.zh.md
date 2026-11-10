@@ -23,7 +23,7 @@
 
 安装 bundle 后，刷新一次 Harness 页面。
 
-### 1. 启用插件 —— 设置 → 插件 → 已安装插件
+### 1. 启用插件 —— 插件页 → 已安装
 
 ![插件管理页中的插件](docs/plugins-installed.png)
 
@@ -78,13 +78,34 @@
 ## 安装
 
 插件已发布到 npm：[`dsh-open-in-ide`](https://www.npmjs.com/package/dsh-open-in-ide)，
-是标准 DSH bundle，通过 Plugin Manager（设置 → 插件）或 `plugin_manager` 工具安装。
+是标准 DSH bundle，通过 Plugin Manager（左侧边栏的**插件**页）或
+`plugin_manager` 工具安装。
+
+### 通过插件管理器安装
+
+Harness 左侧边栏的**插件**页就是插件管理器。打开它，点右上角 **+ 添加插件**，在输入框
+里填下面任意一种：
+
+* npm 包名：`dsh-open-in-ide`
+* 本仓库地址：`https://github.com/harrithy/dsh-open-in-ide`
+* 本地 checkout 目录的绝对路径
+
+![左侧边栏中的“插件”入口](docs/plugins-sidebar.png)
+
+![插件页与“添加插件”按钮](docs/plugins-add.png)
+
+![“添加插件”对话框，填入本仓库地址](docs/plugins-add-dialog.png)
+
+对话框里还可以选择安装源（例如中国大陆镜像源）。只安装你信任的来源：正如弹窗警告
+所说，插件会以 Harness 用户的权限运行。下面两种安装方式功能相同，只影响之后的更新
+方式——填本地 checkout 路径会按 `link:` 安装并从 GitHub 自动更新；填 npm 包名则在这
+个插件页里更新。
 
 ### 从 npm 安装（最简单）
 
-在 Harness 里按名字安装：**设置 → 插件 → 安装**，spec 填 `dsh-open-in-ide`；或让
-agent 用 `plugin_manager` 工具执行 `action: install_bundle`，`target: "dsh-open-in-ide"`。
-也可以用 profile 的包管理器：
+在 Harness 里按名字安装：在插件页点 **+ 添加插件**（见上），spec 填
+`dsh-open-in-ide`；或让 agent 用 `plugin_manager` 工具执行
+`action: install_bundle`，`target: "dsh-open-in-ide"`。也可以用 profile 的包管理器：
 
 ```bash
 dsh plugin --profile <profile> add dsh-open-in-ide
@@ -101,19 +122,19 @@ dsh plugin --profile <profile> add dsh-open-in-ide
    git clone https://github.com/harrithy/dsh-open-in-ide.git
    ```
 
-2. 从这个目录安装 bundle。可在 Harness 中打开 **设置 → 插件 → 安装**，或让
-   agent 用 `plugin_manager` 工具执行 `action: install_bundle`，`target` 填这个
-   目录的绝对路径。也可以用 profile 的包管理器做 `link:` 安装：
+2. 从这个目录安装 bundle。可在 Harness 的插件页把该目录的绝对路径填进 **+ 添加插件**
+   （见上），或让 agent 用 `plugin_manager` 工具执行 `action: install_bundle`，
+   `target` 填这个目录的绝对路径。也可以用 profile 的包管理器做 `link:` 安装：
 
    ```bash
    dsh plugin --profile <profile> add link:/path/to/dsh-open-in-ide
    ```
 
-3. **刷新 Harness 页面**（F5）。Plugin Manager 中会出现 bundle `dsh-open-in-ide`
-   和行 `open-in-ide`，通用设置里会出现新的一行（见[在界面中的位置](#在界面中的位置)）。
+3. **刷新 Harness 页面**（F5）。插件页中会出现 bundle `dsh-open-in-ide` 和行
+   `open-in-ide`，通用设置里会出现新的一行（见[在界面中的位置](#在界面中的位置)）。
 
 两种安装功能相同，只有「自动更新」不同：git checkout 会从 GitHub 拉取并就地重载，
-npm 安装则通过插件管理器升级。
+npm 安装则通过插件页升级。
 
 ## 自动更新
 
@@ -129,7 +150,7 @@ npm 安装则通过插件管理器升级。
 
 **包管理器安装**不能用这种方式 pull，但同一行仍会提示 npm 上的新版本：宿主按
 `updateRegistry`（默认 `https://registry.npmjs.org`）查询该包的 `latest` 版本并与
-已安装版本比较，发现更新时提示去**插件管理器**升级；页面加载时的后台检查也会 toast
+已安装版本比较，发现更新时提示去**插件页**升级；页面加载时的后台检查也会 toast
 一次。插件本身不会安装任何东西。
 
 git checkout 更新需要 `PATH` 上有 `git` 且能访问仓库；包更新提示需要能访问 npm
