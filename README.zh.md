@@ -10,7 +10,7 @@
 家族与 JetBrains 系列）打开对应文件并定位到引用的行，替代内置的文档预览。
 
 一个 DeepSeek Harness 插件（bundle + 浏览器半）。已在 DeepSeek Harness
-`0.2.1-rc.2`（桌面版 / Web profile）上测试。
+`0.2.2-rc.1`（桌面版 / Web profile）上测试。
 
 支持的编辑器（在宿主机器上自动检测）：
 
@@ -44,9 +44,11 @@
   `package.json`、`Cargo.toml`、`pom.xml` 等标记），把项目目录作为文件夹参数传
   给 CLI，于是 VS Code 会**打开或复用项目窗口**，而不是把文件变成散落标签塞进最近
   使用的窗口。没有任何项目标记的文件仍按原方式打开。
-* 打开后会把 IDE 窗口**提到最前**（窗口最小化时先恢复）。Windows 通过一个小型
-  Win32 助手绕过“后台进程无前台权限”的限制；macOS 用 `osascript` 激活应用；
-  Linux 尝试 `wmctrl` / `xdotool`。
+* 打开后会把 IDE 窗口**提到最前**（窗口最小化时先恢复）。Windows 会先用系统自带
+  的 .NET Framework 编译器把一个小型 Win32 助手编译成 exe，之后每次只运行这个
+  exe；它会在窗口出现后立即轮询并置前（没有编译器时回退到 PowerShell 脚本）。
+  macOS 用 `osascript` 激活应用；Linux 尝试 `wmctrl` / `xdotool`。置前在后台执行，
+  点击会先返回“已打开”，不等窗口出现。
 * **两个编辑器家族**：VS Code / Insiders / Cursor / Windsurf 用 `--goto` 启动；
   JetBrains（IntelliJ IDEA、PyCharm、WebStorm、GoLand、CLion、PhpStorm、Rider、
   RubyMine、DataGrip、RustRover）用 `--line <行> <路径>` 启动。浏览器只发送固定
@@ -136,9 +138,10 @@ npm 安装则通过插件管理器升级。
   的 IDE。
 * 选择保存在浏览器（`localStorage`，键 `dsh.open-in-ide.editor`）；插件改名前的
   旧键会被读取一次以完成迁移。
-* 行号/列号取自 chip 文字末尾的 `:42` / `:42:7`。Harness 只把路径暴露在 DOM 的
-  `title` 属性中，所以链接文字是行号的通道。绝对路径和相对工作区的路径都支持，
-  相对路径由宿主按 Session 的工作目录解析。
+* 行号/列号取自 chip 的可见文字：`path:42`、`path:42:7`、`#L42`、`:42–50`
+  这类范围（取起始行），或 `第 42 行` / `line 42` 这样的文字标签。Harness 只把
+  路径暴露在 DOM 的 `title` 属性中，所以链接文字是行号的唯一通道。绝对路径和
+  相对工作区的路径都支持，相对路径由宿主按 Session 的工作目录解析。
 * 列号只会传给 VS Code 家族启动器；JetBrains 启动器只接收行号。
 * 目录引用会作为工作区文件夹打开。
 
@@ -163,7 +166,7 @@ npm 安装则通过插件管理器升级。
 | `openProjectFolder` | `true` | 把文件所属项目根作为文件夹参数传入，让 VS Code 打开/复用项目窗口（仅 VS Code 家族）。设为 false 交给 VS Code 决定。 |
 | `projectMarkers` | 内置列表 | 覆盖项目根标记：不带路径分隔符的文件/目录名，例如 `['.git', 'package.json', 'Cargo.toml']`。 |
 | `focusWindow` | `true` | 打开后把 IDE 窗口提到最前（最小化时先恢复）。设为 false 则交给系统决定。 |
-| `focusDelayMs` | `350` | 首次置前尝试的延迟；冷启动的编辑器窗口还没出现时会自动重试几次。 |
+| `focusDelayMs` | `0` | Windows 置前助手开始找窗口前的额外延迟（毫秒）。助手自身会轮询最多约 3 秒，所以冷启动不需要额外重试。 |
 | `updateCheck` | `true` | 每次页面加载检查一次仓库新版本；设置行里的检查按钮不受此开关影响。 |
 | `updateRepository` | 本仓库 GitHub 地址 | 更新器允许 pull 的仓库；origin 不同会被拒绝。 |
 | `updateDirectory` | 插件所在目录 | 要更新的 checkout 目录（默认就是加载本插件的目录）。 |
@@ -211,13 +214,15 @@ npm 安装则通过插件管理器升级。
 * 检测覆盖上面列出的编辑器 id；不在 `PATH` 上的便携版或列表之外的编辑器需要
   `command`。
 * 列号只会传给 VS Code 家族；JetBrains 启动器只接收行号。
-* 置前是尽力而为：Windows 通过 Win32 助手实现（极特殊的前台策略或安全软件仍可能
-  拒绝），macOS/Linux 依赖 `osascript` / `wmctrl` / `xdotool` 是否可用。
+* 置前是尽力而为：Windows 使用一次性编译的小助手（或 PowerShell 回退），极特殊的
+  前台策略或安全软件仍可能拒绝；macOS/Linux 依赖 `osascript` / `wmctrl` / `xdotool`
+  是否可用。
 * 项目文件夹注入是启发式且仅用于 VS Code 家族：向上找最近的 `.git`/`.hg` 或
   manifest 标记。JetBrains 保持自己的项目管理，只接收文件/行号，不传文件夹。
 * 自动更新仅适用于 origin 与 `updateRepository` 一致的 git checkout，且需要
   `git` 和网络；本地有未提交改动时会故意拒绝，先提交或暂存。
-* 行号/列号来自可见的 chip 文字；链接文字没有行号时只打开文件、不定位。
+* 行号/列号来自可见的 chip 文字（`path:42`、`#L42`、`:42–50`、`第 42 行`、
+  `line 42` 等）；链接文字没有任何位置信息时只打开文件、不定位。
 * 编辑器选择按浏览器保存（`localStorage`）；不同浏览器或 origin 各自独立。
 
 ## 开发
@@ -235,11 +240,37 @@ docs/                  本 README 使用的截图
 提供给浏览器。本地目录安装会链接进 profile，因此修改文件可通过 HMR 生效（浏览器
 半立即生效；宿主半在插件行重载后生效）。
 
+Windows 上宿主会在插件加载时把置前助手编译成
+`%TEMP%\dsh-open-in-ide-focus.exe`（旁边还有 `.cs` 源码副本与 `.stamp` 标记）；
+C# 源码在 `index.js` 里，源码变化会触发重新编译。机器上没有 .NET Framework
+编译器时回退到 PowerShell 脚本 `%TEMP%\dsh-open-in-ide-focus.ps1`。
+
 ## 发布
 
-推送 `v*` tag 后，GitHub Actions（`.github/workflows/publish.yml`）会把
-`package.json` 里的版本发布到 npm，使用 OIDC Trusted Publishing，不需要 token 或
-2FA 验证。
+发布由 tag 驱动：推送 `v*` tag 后，GitHub Actions
+（`.github/workflows/publish.yml`）会把 `package.json` 里的版本发布到 npm，使用
+OIDC Trusted Publishing，不需要 token 或 2FA 验证：
+
+1. 把 `package.json` 的 `version` 改成 npm 上尚未发布过的版本。
+2. 提交并推送 `main`。
+3. 给该提交打 tag 并推送 tag：
+
+   ```bash
+   git tag v0.3.3
+   git push origin main v0.3.3
+   ```
+
+4. tag 会触发 workflow：对两个 JS 文件做语法检查、解析 `package.json`、执行
+   `npm pack --dry-run`，然后用 Node 24 上最新的 npm CLI 发布。
+5. 确认发布结果：
+
+   ```bash
+   npm view dsh-open-in-ide version
+   ```
+
+一次性准备：在 npmjs.com 上该包的 **Settings → Trusted publishing** 里登记
+GitHub Actions，仓库填 `harrithy/dsh-open-in-ide`、workflow 填 `publish.yml`。
+registry 会拒绝已发布过的版本号，所以每次发布前先升版本。
 
 ## 许可证
 

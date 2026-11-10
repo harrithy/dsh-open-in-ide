@@ -11,7 +11,7 @@ family / JetBrains IDE — positioned at the referenced line, instead of the in-
 document preview.
 
 A DeepSeek Harness plugin (bundle + browser half). Tested with DeepSeek Harness
-`0.2.1-rc.2` (Desktop / Web profile).
+`0.2.2-rc.1` (Desktop / Web profile).
 
 Supported editors, detected on the machine hosting the Harness:
 
@@ -49,9 +49,12 @@ VS Code is not installed.
   the **project window** instead of dropping a loose file into the most recently
   used window. A file without any project marker opens as before.
 * After opening, the editor window is **brought to the foreground** (and restored
-  if it was minimized). Windows uses a small Win32 helper to defeat the
-  background-process foreground lock; macOS activates via `osascript`; Linux
-  tries `wmctrl`/`xdotool`.
+  if it was minimized). Windows compiles a small Win32 helper once (the .NET
+  Framework compiler Windows ships) and runs that exe, which polls for the
+  window and raises it as soon as it appears; a host without the compiler falls
+  back to a PowerShell script. macOS activates via `osascript`; Linux tries
+  `wmctrl`/`xdotool`. The raise runs in the background, so a click is reported
+  as soon as the editor accepted the file, without waiting for the window.
 * **Two editor families**: VS Code / VS Code Insiders / Cursor / Windsurf are
   launched with `--goto`; JetBrains IDEs (IntelliJ IDEA, PyCharm, WebStorm,
   GoLand, CLion, PhpStorm, Rider, RubyMine, DataGrip, RustRover) with
@@ -156,10 +159,12 @@ This needs `git` on `PATH` and network access to the repository.
 * The choice is stored in the browser (`localStorage`, key
   `dsh.open-in-ide.editor`); the legacy key of the plugin's former name is read
   once for migration.
-* Line/column come from a `:42` / `:42:7` suffix in the chip label. The harness
-  exposes only the path as a DOM attribute, so the label is the line channel.
-  Absolute and workspace-relative paths are both accepted; relative paths
-  resolve against the Session's workspace directory on the host.
+* Line/column come from the visible chip label: `path:42`, `path:42:7`,
+  `#L42`, a `:42–50` range (its first line), or a prose label such as
+  `第 42 行` or `line 42`. The harness exposes only the path as a DOM
+  attribute, so the label is the only position channel. Absolute and
+  workspace-relative paths are both accepted; relative paths resolve against
+  the Session's workspace directory on the host.
 * The column (when present) is only forwarded to VS Code-family launchers;
   JetBrains launchers receive the line only.
 * Directories open as workspace folders.
@@ -186,7 +191,7 @@ updates):
 | `openProjectFolder` | `true` | Pass the file's project root as a folder argument so VS Code opens or reuses the project window (VS Code family only). Set `false` to let VS Code decide. |
 | `projectMarkers` | built-in list | Override the project-root markers: file or directory names without separators, e.g. `['.git', 'package.json', 'Cargo.toml']`. |
 | `focusWindow` | `true` | Bring the editor window to the foreground after opening it (restore if minimized). Disable to let the OS decide. |
-| `focusDelayMs` | `350` | Delay before the first foreground attempt; when a cold-started editor has no window yet the plugin retries a few times. |
+| `focusDelayMs` | `0` | Extra delay before the Windows helper starts looking for the editor window, in milliseconds. The helper then polls until the window appears (up to ~3 s), so a cold-started editor is raised as soon as its window exists. |
 | `updateCheck` | `true` | Check the repository for a newer version once per page load. The settings row's check button works regardless. |
 | `updateRepository` | this GitHub URL | Repository the updater is allowed to pull from; a different origin is refused. |
 | `updateDirectory` | plugin directory | Checkout directory to update (defaults to the directory this plugin was loaded from). |
@@ -241,17 +246,19 @@ and the host resolves it to an executable it verified.
   or an editor outside those families, needs `command`.
 * The column (when present) is only forwarded to the VS Code family; JetBrains
   launchers receive the line only.
-* Window raising is best-effort: Windows uses a Win32 helper (an unusual
-  foreground policy or security tool can still refuse the change), while macOS
-  and Linux depend on `osascript` / `wmctrl` / `xdotool` being available.
+* Window raising is best-effort: Windows uses a small compiled helper (or the
+  PowerShell fallback) and an unusual foreground policy or security tool can
+  still refuse the change, while macOS and Linux depend on `osascript` /
+  `wmctrl` / `xdotool` being available.
 * Project-folder injection is heuristic and VS Code-family only: it walks up to
   the nearest `.git`/`.hg` or manifest marker. JetBrains IDEs keep their own
   project management and receive only the file/line; no folder is passed.
 * Self-update only works for git checkouts whose origin matches
   `updateRepository`, and requires `git` plus network access. Local uncommitted
   changes block it on purpose; commit or stash them first.
-* Line/column come from the visible chip label; when a link's label does not
-  repeat the line, the file opens without a line target.
+* Line/column come from the visible chip label (`path:42`, `#L42`, `:42–50`,
+  `第 42 行`, `line 42`, …); when the label carries no position, the file opens
+  without a line target.
 * The editor choice is per browser (`localStorage`); another browser or origin
   keeps its own choice.
 
@@ -271,11 +278,41 @@ to the browser as the package's `./client` export. A local directory install is
 linked into the profile, so editing either file takes effect through HMR (client
 immediately; host after the plugin row reloads).
 
+On Windows the host compiles the small window-focus helper into
+`%TEMP%\dsh-open-in-ide-focus.exe` (with a `.cs` source copy and a `.stamp`
+marker beside it) when the plugin loads; the C# source lives in `index.js`, and
+a source change triggers a rebuild. Without the .NET Framework compiler on the
+machine it falls back to the PowerShell script
+`%TEMP%\dsh-open-in-ide-focus.ps1`.
+
 ## Releases
 
-Pushing a `v*` tag publishes the version in `package.json` to npm from GitHub
-Actions (`.github/workflows/publish.yml`) through OIDC trusted publishing — no
-token or 2FA prompt involved.
+Publishing is tag-driven. The workflow
+(`.github/workflows/publish.yml`) publishes the `package.json` version to npm
+through OIDC trusted publishing, so no token or 2FA prompt is involved:
+
+1. Bump `version` in `package.json` to a version npm has not received yet.
+2. Commit and push `main`.
+3. Tag that commit and push the tag:
+
+   ```bash
+   git tag v0.3.3
+   git push origin main v0.3.3
+   ```
+
+4. The tag runs the workflow: it syntax-checks both JS files, parses
+   `package.json`, runs `npm pack --dry-run`, then publishes with the current npm
+   CLI on Node 24.
+5. Confirm the release:
+
+   ```bash
+   npm view dsh-open-in-ide version
+   ```
+
+One-time setup on npmjs.com: the package's **Settings → Trusted publishing**
+must list GitHub Actions with repository `harrithy/dsh-open-in-ide` and workflow
+`publish.yml`. The registry refuses an already-published version, so bump before
+tagging.
 
 ## License
 
