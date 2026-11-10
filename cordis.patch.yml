@@ -41,11 +41,13 @@
         # projectMarkers: ['.git', 'package.json', 'Cargo.toml']
         # Bring the editor window to the foreground after opening it. A
         # detached launch from the background host has no foreground rights, so
-        # the plugin raises the window explicitly.
+        # the plugin raises the window explicitly through a small compiled
+        # helper that polls for the window (PowerShell is the fallback).
         focusWindow: true
-        # Delay before the first foreground attempt, in milliseconds; retries
-        # follow while a cold-started editor has not created its window yet.
-        focusDelayMs: 350
+        # Extra delay before the helper starts looking for the editor window,
+        # in milliseconds. The helper polls for up to ~3 s by itself, so a cold
+        # start needs no further retries.
+        focusDelayMs: 0
         # Extra arguments placed before the target arguments.
         extraArgs: []
         # Early-failure watch window for the detached launcher, in milliseconds.

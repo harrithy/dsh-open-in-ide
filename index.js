@@ -23,7 +23,7 @@
  * command line.
  */
 import { spawn } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -243,7 +243,7 @@ function normalizeConfig(input) {
     commandKind: value.commandKind === KIND_JETBRAINS ? KIND_JETBRAINS : KIND_VSCODE,
     editor: EDITOR_IDS.has(editor) ? editor : DEFAULT_EDITOR,
     extraArgs,
-    focusDelayMs: Number.isFinite(focusDelay) ? Math.max(0, Math.min(5000, Math.trunc(focusDelay))) : 350,
+    focusDelayMs: Number.isFinite(focusDelay) ? Math.max(0, Math.min(5000, Math.trunc(focusDelay))) : 0,
     focusWindow: value.focusWindow !== false,
     openProjectFolder: value.openProjectFolder !== false,
     projectMarkers: markers.length > 0 ? markers : DEFAULT_PROJECT_MARKERS,
@@ -591,6 +591,272 @@ function ensureFocusScript() {
   }
 }
 
+/**
+ * Windows focus helper source. Starting `powershell.exe` and compiling this
+ * class through `Add-Type` on every click costs several hundred milliseconds,
+ * so the same code is compiled once (by the .NET Framework compiler Windows
+ * ships) into a console exe that polls for the editor window and raises it as
+ * soon as it appears. The PowerShell script above stays the fallback when no
+ * compiler is available. This source is ASCII-only so csc reads it under any
+ * console code page.
+ */
+const FOCUS_HELPER_SOURCE = String.raw`using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+public static class DshWindowFocus
+{
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("user32.dll")]
+    public static extern bool SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+
+    public static List<IntPtr> Handles()
+    {
+        List<IntPtr> list = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) { list.Add(hWnd); return true; }, IntPtr.Zero);
+        return list;
+    }
+
+    public static string TitleOf(IntPtr hWnd)
+    {
+        int length = GetWindowTextLength(hWnd);
+        if (length <= 0) return string.Empty;
+        StringBuilder buffer = new StringBuilder(length + 1);
+        GetWindowText(hWnd, buffer, buffer.Capacity);
+        return buffer.ToString();
+    }
+
+    public static uint ProcessOf(IntPtr hWnd)
+    {
+        uint pid;
+        GetWindowThreadProcessId(hWnd, out pid);
+        return pid;
+    }
+
+    public static bool Focus(IntPtr hWnd)
+    {
+        if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
+        SetForegroundWindow(hWnd);
+        if (GetForegroundWindow() == hWnd) return true;
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        SetForegroundWindow(hWnd);
+        if (GetForegroundWindow() == hWnd) return true;
+        SwitchToThisWindow(hWnd, true);
+        return GetForegroundWindow() == hWnd;
+    }
+
+    static string Arg(string[] args, string name, string fallback)
+    {
+        for (int index = 0; index < args.Length - 1; index++)
+            if (args[index] == name) return args[index + 1];
+        return fallback;
+    }
+
+    static string StripExtension(string value)
+    {
+        int index = value.LastIndexOf('.');
+        return index <= 0 ? value : value.Substring(0, index);
+    }
+
+    public static int Main(string[] args)
+    {
+        string[] processNames = Arg(args, "-ProcessNameList", "").Split(';');
+        List<string> hints = new List<string>();
+        foreach (string hint in Arg(args, "-TitleHintList", "").Split('|'))
+            if (hint.Trim().Length > 0) hints.Add(hint.Trim().ToLowerInvariant());
+        int delayMs = 0;
+        int pollMs = 80;
+        int timeoutMs = 3000;
+        Int32.TryParse(Arg(args, "-DelayMs", "0"), out delayMs);
+        Int32.TryParse(Arg(args, "-PollMs", "80"), out pollMs);
+        Int32.TryParse(Arg(args, "-TimeoutMs", "3000"), out timeoutMs);
+        if (pollMs < 20) pollMs = 20;
+
+        HashSet<int> known = new HashSet<int>();
+        for (int index = 0; index < processNames.Length; index++)
+        {
+            string name = StripExtension(processNames[index].Trim());
+            if (name.Length == 0) continue;
+            try
+            {
+                foreach (Process process in Process.GetProcessesByName(name)) known.Add(process.Id);
+            }
+            catch
+            {
+            }
+        }
+        if (known.Count == 0)
+        {
+            Console.WriteLine("{\"found\":false,\"focused\":false,\"reason\":\"no-process\"}");
+            return 0;
+        }
+        if (delayMs > 0) Thread.Sleep(delayMs);
+
+        Stopwatch clock = Stopwatch.StartNew();
+        while (true)
+        {
+            bool found = false;
+            int score = 0;
+            int candidates = 0;
+            IntPtr first = IntPtr.Zero;
+            IntPtr best = IntPtr.Zero;
+            foreach (IntPtr handle in Handles())
+            {
+                if (!IsWindowVisible(handle)) continue;
+                uint pid = ProcessOf(handle);
+                if (!known.Contains((int)pid)) continue;
+                string title = TitleOf(handle);
+                if (title == null || title.Trim().Length == 0) continue;
+                candidates++;
+                found = true;
+                if (first == IntPtr.Zero) first = handle;
+                string lower = title.ToLowerInvariant();
+                int current = 0;
+                for (int hint = 0; hint < hints.Count; hint++)
+                    if (lower.Contains(hints[hint])) current++;
+                if (current > score)
+                {
+                    score = current;
+                    best = handle;
+                }
+            }
+            if (found && (score > 0 || clock.ElapsedMilliseconds >= timeoutMs))
+            {
+                if (best == IntPtr.Zero) best = first;
+                bool focused = Focus(best);
+                Console.WriteLine("{\"found\":true,\"focused\":" + (focused ? "true" : "false") + ",\"candidates\":" + candidates + ",\"score\":" + score + "}");
+                return 0;
+            }
+            if (clock.ElapsedMilliseconds >= timeoutMs) break;
+            Thread.Sleep(pollMs);
+        }
+        Console.WriteLine("{\"found\":false,\"focused\":false,\"reason\":\"no-window\"}");
+        return 0;
+    }
+}
+`
+
+/** Compiled helper, its source file, and the source stamp that versions it. */
+const FOCUS_HELPER_PATH = join(tmpdir(), 'dsh-open-in-ide-focus.exe')
+const FOCUS_HELPER_SOURCE_PATH = join(tmpdir(), 'dsh-open-in-ide-focus.cs')
+const FOCUS_HELPER_STAMP_PATH = join(tmpdir(), 'dsh-open-in-ide-focus.stamp')
+/** How long the compiled helper keeps looking for the editor window. */
+const FOCUS_WINDOW_TIMEOUT_MS = 3000
+/** How often the compiled helper re-enumerates windows while it waits. */
+const FOCUS_WINDOW_POLL_MS = 80
+
+/**
+ * Stable stamp of the helper source (djb2 over UTF-16 units): a plugin update
+ * that changes the source rebuilds the exe instead of reusing a stale one.
+ */
+function focusHelperStamp() {
+  let hash = 5381
+  for (let index = 0; index < FOCUS_HELPER_SOURCE.length; index += 1) {
+    hash = ((hash * 33) ^ FOCUS_HELPER_SOURCE.charCodeAt(index)) >>> 0
+  }
+  return hash.toString(16)
+}
+const FOCUS_HELPER_STAMP = focusHelperStamp()
+
+/** Path of the current compiled helper, or undefined when it must be rebuilt. */
+function ensureFocusHelper() {
+  try {
+    if (!existsSync(FOCUS_HELPER_PATH)) return undefined
+    return readFileSync(FOCUS_HELPER_STAMP_PATH, 'utf8').trim() === FOCUS_HELPER_STAMP
+      ? FOCUS_HELPER_PATH
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The .NET Framework C# compiler that ships with Windows, when present. */
+function findCSharpCompiler() {
+  const root = process.env.WINDIR ?? process.env.SystemRoot
+  if (typeof root !== 'string' || root === '') return undefined
+  for (const framework of ['Framework64', 'Framework']) {
+    const candidate = join(root, 'Microsoft.NET', framework, 'v4.0.30319', 'csc.exe')
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
+}
+
+let focusHelperBuild
+
+/**
+ * Compile the helper once per source version. This runs in the background after
+ * the plugin loads; a click that arrives before it finishes still uses the
+ * PowerShell fallback, and the next click uses the exe.
+ */
+function warmFocusHelper() {
+  if (focusHelperBuild !== undefined) return focusHelperBuild
+  focusHelperBuild = (async () => {
+    if (ensureFocusHelper() !== undefined) return true
+    const compiler = findCSharpCompiler()
+    if (compiler === undefined) return false
+    try {
+      writeFileSync(FOCUS_HELPER_SOURCE_PATH, FOCUS_HELPER_SOURCE, 'utf8')
+      // Compile beside the target and swap it in, so a click never runs a
+      // half-written exe while this build is in progress.
+      const staged = `${FOCUS_HELPER_PATH}.${process.pid}.staged.exe`
+      const compiled = await runHelper(compiler, [
+        '/nologo',
+        '/target:exe',
+        `/out:${staged}`,
+        FOCUS_HELPER_SOURCE_PATH,
+      ], 20_000)
+      if (compiled.status !== 0 || !existsSync(staged)) {
+        try {
+          unlinkSync(staged)
+        } catch {
+          /* nothing was written */
+        }
+        return false
+      }
+      try {
+        renameSync(staged, FOCUS_HELPER_PATH)
+      } catch {
+        try {
+          unlinkSync(staged)
+        } catch {
+          /* already gone */
+        }
+        return false
+      }
+      writeFileSync(FOCUS_HELPER_STAMP_PATH, FOCUS_HELPER_STAMP, 'utf8')
+      return true
+    } catch {
+      return false
+    }
+  })()
+  return focusHelperBuild
+}
+
 /** Parse the helper's last JSON line. */
 function parseFocusResult(stdout) {
   const lines = String(stdout ?? '').trim().split(/\r?\n/u)
@@ -629,8 +895,33 @@ function editorAppNames(editor) {
 /** Windows: restore and raise the editor window, matching by title hints. */
 async function focusWindowsEditor(editor, command, hints, config) {
   const names = windowProcessNames(editor, command)
-  if (names.length === 0 || !ensureFocusScript()) return undefined
+  if (names.length === 0) return undefined
   const titleHints = hints.filter((hint) => typeof hint === 'string' && hint !== '').join('|')
+
+  // Fast path: one exe start that polls for the window instead of a
+  // PowerShell start plus Add-Type compilation per attempt.
+  const helper = ensureFocusHelper()
+  if (helper !== undefined) {
+    const result = await runHelper(helper, [
+      '-ProcessNameList',
+      names.join(';'),
+      '-TitleHintList',
+      titleHints,
+      '-DelayMs',
+      String(config.focusDelayMs),
+      '-PollMs',
+      String(FOCUS_WINDOW_POLL_MS),
+      '-TimeoutMs',
+      String(FOCUS_WINDOW_TIMEOUT_MS),
+    ], FOCUS_WINDOW_TIMEOUT_MS + 3000)
+    const seen = parseFocusResult(result.stdout)
+    if (seen !== undefined) return seen.focused === true
+    // The compiled helper failed at runtime; keep the script path for this click.
+  } else {
+    void warmFocusHelper()
+  }
+
+  if (!ensureFocusScript()) return undefined
   let seen
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await delay(attempt === 0 ? config.focusDelayMs : 700)
@@ -1262,6 +1553,10 @@ async function inspectTarget(ctx, absolutePath) {
 export function apply(ctx, rawConfig) {
   const config = normalizeConfig(rawConfig)
 
+  // Compile the fast Windows focus helper in the background; a click that
+  // arrives before it finishes still uses the PowerShell fallback.
+  if (process.platform === 'win32') void warmFocusHelper()
+
   /** Answer an untrusted/unauthenticated request; true when it was rejected. */
   const rejected = (req, res) => {
     const rejection = ctx.connection.requestRejection({ headers: req.headers })
@@ -1409,8 +1704,10 @@ export function apply(ctx, rawConfig) {
     }
 
     // A detached launch from a background host has no foreground rights, so the
-    // editor can open behind the current window. Raise it explicitly.
-    let focused
+    // editor can open behind the current window. Raise it explicitly, but do not
+    // hold the response for it: on a cold-started editor the helper may poll for
+    // a few seconds while the file is already opening, and the browser should
+    // hear about the successful launch as soon as it happened.
     if (config.focusWindow) {
       const hints = [basename(target.processPath)]
       if (projectRoot !== undefined) {
@@ -1421,7 +1718,7 @@ export function apply(ctx, rawConfig) {
         const workspaceName = basename(workspace)
         if (workspaceName !== '' && !hints.includes(workspaceName)) hints.push(workspaceName)
       }
-      focused = await focusEditorWindow(launcher.editor, launcher.command, hints, config)
+      void focusEditorWindow(launcher.editor, launcher.command, hints, config).catch(() => {})
     }
 
     sendJson(res, 200, {
@@ -1434,7 +1731,7 @@ export function apply(ctx, rawConfig) {
       editor: launcher.editor,
       kind: launcher.kind,
       launcher: launcher.command,
-      focused: focused ?? null,
+      focused: null,
     })
   }
 
