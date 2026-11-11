@@ -3,6 +3,9 @@
   "version": "0.3.4",
   "description": "Open file references from the DeepSeek Harness chat output in your IDE (VS Code family or JetBrains, Visual Studio Code by default), positioned at the referenced line, in its project window, brought to the foreground, and self-updating from GitHub.",
   "type": "module",
+  "scripts": {
+    "test": "node --test test/client.test.js test/host.test.js"
+  },
   "license": "MIT",
   "author": "harrithy",
   "repository": {

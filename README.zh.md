@@ -62,6 +62,8 @@
 * **Alt / Shift / Ctrl + 单击**保留内置行为：文件引用走侧栏预览，已编辑文件行走
   右侧审查页。
 * 顶部 toast 提示目标与 IDE，失败时给出原因（文件不存在、IDE 未安装、启动失败）。
+* 打开请求会校验宿主的成功响应并设置超时；进行中的同一目标重复点击会合并，失败后可再次点击。
+  IDE 探测失败或未发现编辑器时，设置行提供「重新检测」。
 * 无构建步骤、无依赖、无遥测。浏览器半以包的 `./client` 导出提供，宿主半只使用
   Node 内置模块。
 
@@ -150,6 +152,8 @@ npm 安装则通过插件页升级。
   `git pull --ff-only`，然后通过 HMR 就地重载插件，**不需要重启 Harness**。
 * 更新器只信任配置的 `updateRepository` origin；本地有未提交改动、origin 不匹配、
   或无法快进的历史都会被拒绝。
+* 缺少 origin、远程分支不存在、游离 HEAD、分支分叉或 Git 检查失败会明确显示原因；
+  这些状态不会被提示为「已是最新」，也不会执行自动快进更新。
 
 **包管理器安装**不能用这种方式 pull，但同一行仍会提示 npm 上的新版本：宿主按
 `updateRegistry`（默认 `https://registry.npmjs.org`）查询该包的 `latest` 版本并与
@@ -167,7 +171,7 @@ registry。
   的 IDE。
 * 选择保存在浏览器（`localStorage`，键 `dsh.open-in-ide.editor`）；插件改名前的
   旧键会被读取一次以完成迁移。
-* 行号/列号取自 chip 的可见文字：`path:42`、`path:42:7`、`#L42`、`:42–50`
+* 行号/列号取自 chip 的可见文字：`path:42`、`path:42:7`、`#L42`、`:42–50`、`:42-L50`
   这类范围（取起始行），或 `第 42 行` / `line 42` 这样的文字标签。Harness 只把
   路径暴露在 DOM 的 `title` 属性中，所以链接文字是行号的唯一通道。绝对路径和
   相对工作区的路径都支持，相对路径由宿主按 Session 的工作目录解析。
@@ -252,7 +256,7 @@ registry。
   manifest 标记。JetBrains 保持自己的项目管理，只接收文件/行号，不传文件夹。
 * 自动更新仅适用于 origin 与 `updateRepository` 一致的 git checkout，且需要
   `git` 和网络；本地有未提交改动时会故意拒绝，先提交或暂存。
-* 行号/列号来自可见的 chip 文字（`path:42`、`#L42`、`:42–50`、`第 42 行`、
+* 行号/列号来自可见的 chip 文字（`path:42`、`#L42`、`:42–50`、`:42-L50`、`第 42 行`、
   `line 42` 等）；链接文字没有任何位置信息时只打开文件、不定位。
 * 编辑器选择按浏览器保存（`localStorage`）；不同浏览器或 origin 各自独立。
 
@@ -265,6 +269,7 @@ cordis.patch.yml       bundle 行声明 + 默认配置
 locale/{en,zh}.json    Plugin Manager 标题/描述
 icon.svg               插件图标
 docs/                  本 README 使用的截图
+test/                  浏览器点击、宿主路由与 Windows 启动回归检查
 ```
 
 没有构建步骤：`index.js` 由 Loader 加载，`client.js` 作为包的 `./client` 导出
@@ -275,6 +280,10 @@ Windows 上宿主会在插件加载时把置前助手编译成
 `%TEMP%\dsh-open-in-ide-focus.exe`（旁边还有 `.cs` 源码副本与 `.stamp` 标记）；
 C# 源码在 `index.js` 里，源码变化会触发重新编译。机器上没有 .NET Framework
 编译器时回退到 PowerShell 脚本 `%TEMP%\dsh-open-in-ide-focus.ps1`。
+
+在源码目录执行 `npm test` 运行回归检查，无需安装依赖。Git 更新用例只操作独立临时仓库，
+远端也在本机，不访问网络；Windows 用例通过捕获启动器检查实际参数，并编译置前助手验证
+冷启动期间的进程轮询，不启动真实 IDE。提交和 PR 的 CI 覆盖 Linux/Windows，发布前也会运行测试。
 
 ## 发布
 

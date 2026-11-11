@@ -325,17 +325,26 @@ function parseBody(text) {
   }
 }
 
-/** Windows argv quoting for a `cmd.exe /d /s /c` command line. */
+/** 为批处理转发参数保留引号，以及引号前和参数末尾的反斜杠。 */
 function quoteCmdArg(value) {
-  return '"' + String(value).replace(/"/g, '""') + '"'
+  return '"' + String(value).replace(/(\\*)"/g, '$1$1""').replace(/\\+$/g, '$&$&') + '"'
 }
 
 /**
- * Build the full `cmd.exe /s /c` command string. The extra outer quotes make
- * `/s` strip exactly one wrapper, leaving the correctly quoted launcher call.
+ * 通过子进程环境传入已引用的参数，避免路径中的 %变量名% 被 CMD 再次展开。
+ * 关闭延迟展开以保留感叹号；外层引号供 /s 剥离，内层引号保留参数边界。
  */
-function buildCmdLine(command, args) {
-  return '"' + [quoteCmdArg(command), ...args.map(quoteCmdArg)].join(' ') + '"'
+function buildCmdLaunch(command, args, environment) {
+  const env = { ...environment }
+  const references = [command, ...args].map((value, index) => {
+    const name = `DSH_OPEN_IDE_ARG_${index}`
+    env[name] = quoteCmdArg(value)
+    return `%${name}%`
+  })
+  return {
+    args: ['/d', '/v:off', '/s', '/c', '"' + references.join(' ') + '"'],
+    env,
+  }
 }
 
 /** Child environment: inherit the caller's, minus credential-looking names. */
@@ -369,9 +378,11 @@ function launchEditor(command, args, options) {
     }
     let child
     try {
+      const cmdLaunch = windowsScript ? buildCmdLaunch(command, args, spawnOptions.env) : undefined
       child = windowsScript
-        ? spawn(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', buildCmdLine(command, args)], {
+        ? spawn(process.env.ComSpec ?? 'cmd.exe', cmdLaunch.args, {
           ...spawnOptions,
+          env: cmdLaunch.env,
           windowsVerbatimArguments: true,
         })
         : spawn(command, args, spawnOptions)
@@ -707,29 +718,28 @@ public static class DshWindowFocus
         Int32.TryParse(Arg(args, "-TimeoutMs", "3000"), out timeoutMs);
         if (pollMs < 20) pollMs = 20;
 
-        HashSet<int> known = new HashSet<int>();
-        for (int index = 0; index < processNames.Length; index++)
-        {
-            string name = StripExtension(processNames[index].Trim());
-            if (name.Length == 0) continue;
-            try
-            {
-                foreach (Process process in Process.GetProcessesByName(name)) known.Add(process.Id);
-            }
-            catch
-            {
-            }
-        }
-        if (known.Count == 0)
-        {
-            Console.WriteLine("{\"found\":false,\"focused\":false,\"reason\":\"no-process\"}");
-            return 0;
-        }
         if (delayMs > 0) Thread.Sleep(delayMs);
 
+        bool sawProcess = false;
         Stopwatch clock = Stopwatch.StartNew();
         while (true)
         {
+            // Refresh process IDs on every poll, including a cold editor start.
+            HashSet<int> known = new HashSet<int>();
+            for (int index = 0; index < processNames.Length; index++)
+            {
+                string name = StripExtension(processNames[index].Trim());
+                if (name.Length == 0) continue;
+                try
+                {
+                    foreach (Process process in Process.GetProcessesByName(name))
+                        using (process) known.Add(process.Id);
+                }
+                catch
+                {
+                }
+            }
+            if (known.Count > 0) sawProcess = true;
             bool found = false;
             int score = 0;
             int candidates = 0;
@@ -765,7 +775,7 @@ public static class DshWindowFocus
             if (clock.ElapsedMilliseconds >= timeoutMs) break;
             Thread.Sleep(pollMs);
         }
-        Console.WriteLine("{\"found\":false,\"focused\":false,\"reason\":\"no-window\"}");
+        Console.WriteLine("{\"found\":false,\"focused\":false,\"reason\":\"" + (sawProcess ? "no-window" : "no-process") + "\"}");
         return 0;
     }
 }
@@ -923,7 +933,7 @@ async function focusWindowsEditor(editor, command, hints, config) {
       String(FOCUS_WINDOW_POLL_MS),
       '-TimeoutMs',
       String(FOCUS_WINDOW_TIMEOUT_MS),
-    ], FOCUS_WINDOW_TIMEOUT_MS + 3000)
+    ], config.focusDelayMs + FOCUS_WINDOW_TIMEOUT_MS + 3000)
     const seen = parseFocusResult(result.stdout)
     if (seen !== undefined) return seen.focused === true
     // The compiled helper failed at runtime; keep the script path for this click.
@@ -1221,7 +1231,13 @@ async function updateState(config, options = {}) {
     }
   }
   const branchResult = await gitCommand(directory, ['rev-parse', '--abbrev-ref', 'HEAD'], 5000)
-  const branch = branchResult.code === 0 && branchResult.stdout.trim() !== 'HEAD' ? branchResult.stdout.trim() : 'main'
+  if (branchResult.code !== 0) {
+    return { ...base, mode: 'git', trusted: true, updateAvailable: false, reason: 'git-failed', detail: shortDiagnostic(branchResult.stderr) }
+  }
+  const branch = branchResult.stdout.trim()
+  if (branch === 'HEAD') {
+    return { ...base, mode: 'git', trusted: true, updateAvailable: false, reason: 'detached-head' }
+  }
   const fetched = await gitCommand(directory, ['fetch', '--quiet', 'origin'], 20_000)
   if (fetched.code !== 0) {
     return {
@@ -1239,13 +1255,17 @@ async function updateState(config, options = {}) {
   if (remoteHeadResult.code !== 0) {
     return { ...base, mode: 'git', trusted: true, branch, updateAvailable: false, reason: 'remote-branch-missing' }
   }
-  const remoteHead = remoteHeadResult.stdout.trim()
   const behindResult = await gitCommand(directory, ['rev-list', '--count', `HEAD..${remoteRef}`], 5000)
   const aheadResult = await gitCommand(directory, ['rev-list', '--count', `${remoteRef}..HEAD`], 5000)
   const behind = Number.parseInt(behindResult.stdout.trim(), 10)
   const ahead = Number.parseInt(aheadResult.stdout.trim(), 10)
   const statusResult = await gitCommand(directory, ['status', '--porcelain', '--untracked-files=no'], 5000)
-  const dirty = statusResult.code === 0 && statusResult.stdout.trim() !== ''
+  // 检查命令失败时不把仓库误判为干净或最新，也不允许自动更新。
+  const failed = [behindResult, aheadResult, statusResult].find((result) => result.code !== 0)
+  if (failed !== undefined || !Number.isSafeInteger(behind) || behind < 0 || !Number.isSafeInteger(ahead) || ahead < 0) {
+    return { ...base, mode: 'git', trusted: true, branch, updateAvailable: false, reason: 'git-failed', detail: shortDiagnostic(failed?.stderr) }
+  }
+  const dirty = statusResult.stdout.trim() !== ''
   const remoteManifest = await gitCommand(directory, ['show', `${remoteRef}:package.json`], 5000)
   let latest = null
   if (remoteManifest.code === 0) {
@@ -1256,19 +1276,17 @@ async function updateState(config, options = {}) {
       latest = null
     }
   }
-  const safeBehind = Number.isFinite(behind) ? behind : 0
-  const safeAhead = Number.isFinite(ahead) ? ahead : 0
   return {
     ...base,
     mode: 'git',
     trusted: true,
     branch,
     latest,
-    behind: safeBehind,
-    ahead: safeAhead,
+    behind,
+    ahead,
     dirty,
-    updateAvailable: safeBehind > 0,
-    reason: safeBehind > 0 ? undefined : 'up-to-date',
+    updateAvailable: behind > 0,
+    reason: behind > 0 && ahead > 0 ? 'diverged' : behind > 0 ? undefined : 'up-to-date',
   }
 }
 
@@ -1297,8 +1315,8 @@ async function applyUpdate(config, ctx) {
   if (state.trusted === false) {
     return { ok: false, applied: false, reason: state.reason ?? 'origin-mismatch', current: state.current }
   }
-  if (state.reason === 'fetch-failed') {
-    return { ok: false, applied: false, reason: 'fetch-failed', detail: state.detail, current: state.current }
+  if (state.reason !== undefined && state.reason !== 'up-to-date') {
+    return { ok: false, applied: false, reason: state.reason, detail: state.detail, current: state.current }
   }
   if (state.dirty === true) {
     return { ok: false, applied: false, reason: 'dirty-working-tree', current: state.current, latest: state.latest, behind: state.behind }
@@ -1705,7 +1723,7 @@ export function apply(ctx, rawConfig) {
 
   // Compile the fast Windows focus helper in the background; a click that
   // arrives before it finishes still uses the PowerShell fallback.
-  if (process.platform === 'win32') void warmFocusHelper()
+  if (process.platform === 'win32' && config.focusWindow) void warmFocusHelper()
 
   /** Answer an untrusted/unauthenticated request; true when it was rejected. */
   const rejected = (req, res) => {

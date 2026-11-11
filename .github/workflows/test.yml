@@ -1,0 +1,27 @@
+name: Test
+
+# 普通提交和 PR 同时验证 Linux 与 Windows，覆盖真实批处理及置前助手。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node --check index.js
+      - run: node --check client.js
+      - run: npm test
+      - run: npm pack --dry-run

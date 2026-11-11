@@ -75,6 +75,10 @@ VS Code is not installed.
 * No build step, no dependencies, no telemetry. The browser half ships as the
   package's `./client` export; the host half only uses Node built-ins.
 
+* Open requests validate the host's success response and time out; repeated
+  clicks on the same pending target are deduplicated. Settings offers **Scan
+  again** when IDE discovery fails or finds no supported editor.
+
 ## Requirements
 
 * A DeepSeek Harness Web GUI (Desktop or a `web` profile). The host composition
@@ -190,7 +194,7 @@ package-update notices need network access to the registry.
   `dsh.open-in-ide.editor`); the legacy key of the plugin's former name is read
   once for migration.
 * Line/column come from the visible chip label: `path:42`, `path:42:7`,
-  `#L42`, a `:42–50` range (its first line), or a prose label such as
+  `#L42`, a `:42–50` / `:42-L50` range (its first line), or a prose label such as
   `第 42 行` or `line 42`. The harness exposes only the path as a DOM
   attribute, so the label is the only position channel. Absolute and
   workspace-relative paths are both accepted; relative paths resolve against
@@ -288,7 +292,7 @@ and the host resolves it to an executable it verified.
 * Self-update only works for git checkouts whose origin matches
   `updateRepository`, and requires `git` plus network access. Local uncommitted
   changes block it on purpose; commit or stash them first.
-* Line/column come from the visible chip label (`path:42`, `#L42`, `:42–50`,
+* Line/column come from the visible chip label (`path:42`, `#L42`, `:42–50`, `:42-L50`,
   `第 42 行`, `line 42`, …); when the label carries no position, the file opens
   without a line target.
 * The editor choice is per browser (`localStorage`); another browser or origin
@@ -303,6 +307,7 @@ cordis.patch.yml       Bundle row declaration + defaults
 locale/{en,zh}.json    Plugin Manager title/description
 icon.svg               Plugin artwork
 docs/                  Screenshots used by this README
+test/                  Browser, host-route, and Windows launcher regression checks
 ```
 
 There is no build step: `index.js` is loaded by the Loader, `client.js` is served
@@ -316,6 +321,12 @@ marker beside it) when the plugin loads; the C# source lives in `index.js`, and
 a source change triggers a rebuild. Without the .NET Framework compiler on the
 machine it falls back to the PowerShell script
 `%TEMP%\dsh-open-in-ide-focus.ps1`.
+
+Run `npm test` from the source checkout; no dependencies need installing. Git
+update tests use isolated temporary repositories with local remotes and no
+network access. Windows tests capture the actual batch-launcher arguments and
+compile the focus helper to check late process discovery without launching an
+IDE. Commit/PR CI runs on Linux and Windows; publishing also runs the tests.
 
 ## Releases
 

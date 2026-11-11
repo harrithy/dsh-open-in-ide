@@ -30,6 +30,7 @@ jobs:
         run: |
           node --check index.js
           node --check client.js
+          npm test
           node -e "JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'))"
           npx --yes npm@latest pack --dry-run
 

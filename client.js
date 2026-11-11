@@ -15,6 +15,11 @@ window.__ModuleLoader__.load({
     const MENTION_CLASS = /(?:^|[\s_-])fileMention(?:[\s_-]|$)/
     /** Labels longer than this are not file references. */
     const MAX_LABEL_LENGTH = 512
+    /** 请求超时覆盖宿主的启动观察窗口和 Git 检查/更新窗口。 */
+    const REQUEST_TIMEOUT_MS = 15_000
+    const OPEN_TIMEOUT_MS = 65_000
+    const UPDATE_CHECK_TIMEOUT_MS = 65_000
+    const UPDATE_APPLY_TIMEOUT_MS = 120_000
     /** Browser-side preference: which editor opens file links. */
     const EDITOR_STORAGE_KEY = 'dsh.open-in-ide.editor'
     /** Key used by the plugin before its rename; read once for migration. */
@@ -44,10 +49,14 @@ window.__ModuleLoader__.load({
       'toast.opening': 'Opening {target} in {editor}…',
       'toast.opened': 'Opened {target} in {editor}',
       'toast.failed': 'Could not open in {editor}: {message}',
+      'request.timeout': 'The request timed out. Check the host and try again.',
+      'request.invalid': 'The host returned an invalid response. Refresh the page and try again.',
       'settings.title': 'IDE for file links',
       'settings.description': 'Which installed IDE opens file references in the conversation. Visual Studio Code by default, otherwise the first detected IDE.',
       'settings.noneShort': 'No IDE detected',
       'settings.none': 'No supported IDE was found on this machine. Install VS Code, Cursor, Windsurf, or a JetBrains IDE.',
+      'settings.retry': 'Scan again',
+      'settings.detectionFailed': 'Could not detect installed IDEs. Scan again or choose an editor below.',
       'editor.custom': 'Custom (config.command)',
       'editor.vscode': 'Visual Studio Code',
       'editor.vscodeInsiders': 'VS Code Insiders',
@@ -89,6 +98,11 @@ window.__ModuleLoader__.load({
       'update.toast': 'Plugin update {latest} is available (Settings → General → Plugin updates).',
       'update.reason.dirty-working-tree': 'the checkout has local changes',
       'update.reason.fetch-failed': 'could not reach the repository',
+      'update.reason.no-origin': 'the checkout has no origin remote',
+      'update.reason.remote-branch-missing': 'the current branch does not exist on origin',
+      'update.reason.diverged': 'local and remote histories have diverged; reconcile the branch before updating',
+      'update.reason.detached-head': 'the checkout is not on a branch; switch to a branch before updating',
+      'update.reason.git-failed': 'could not inspect the checkout state',
       'update.reason.pull-failed': 'git pull failed',
       'update.reason.registry-failed': 'could not reach the npm registry',
       'update.reason.not-a-git-checkout': 'not a git checkout',
@@ -100,10 +114,14 @@ window.__ModuleLoader__.load({
       'toast.opening': '正在 {editor} 中打开 {target}…',
       'toast.opened': '已在 {editor} 中打开 {target}',
       'toast.failed': '无法在 {editor} 中打开：{message}',
+      'request.timeout': '请求超时，请检查宿主连接后重试。',
+      'request.invalid': '宿主返回了无效响应，请刷新页面后重试。',
       'settings.title': '打开文件的 IDE',
       'settings.description': '点击对话中的文件引用时用哪个 IDE 打开；默认 Visual Studio Code，没有则用扫描到的第一个。',
       'settings.noneShort': '未检测到 IDE',
       'settings.none': '本机未扫描到受支持的 IDE，请安装 VS Code、Cursor、Windsurf 或 JetBrains 系列 IDE。',
+      'settings.retry': '重新检测',
+      'settings.detectionFailed': '未能检测本机 IDE，可重新检测或先选择编辑器。',
       'editor.custom': '自定义（config.command）',
       'editor.vscode': 'Visual Studio Code',
       'editor.vscodeInsiders': 'VS Code Insiders',
@@ -145,6 +163,11 @@ window.__ModuleLoader__.load({
       'update.toast': '插件有新版本 {latest}（设置 → 通用设置 → 插件更新）。',
       'update.reason.dirty-working-tree': '本地有未提交改动',
       'update.reason.fetch-failed': '无法访问仓库',
+      'update.reason.no-origin': '本地仓库未配置 origin 远程地址',
+      'update.reason.remote-branch-missing': 'origin 上不存在当前分支',
+      'update.reason.diverged': '本地和远程分支已分叉，请先处理分支差异再更新',
+      'update.reason.detached-head': '当前未处于分支上，请先切换到分支再更新',
+      'update.reason.git-failed': '无法检查本地仓库状态',
       'update.reason.pull-failed': 'git pull 失败',
       'update.reason.registry-failed': '无法访问 npm registry',
       'update.reason.not-a-git-checkout': '不是 git checkout',
@@ -222,6 +245,45 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 将可识别的网络错误翻译成当前界面语言。 */
+    function requestErrorMessage(t, error) {
+      if (error?.code === 'request-timeout') return translate(t, 'request.timeout')
+      if (error?.code === 'invalid-response') return translate(t, 'request.invalid')
+      return typeof error?.message === 'string' ? error.message : String(error)
+    }
+
+    /** 无效响应不能作为成功结果；HTTP 200 也必须携带 JSON 对象。 */
+    function invalidResponse() {
+      return Object.assign(new Error('invalid host response'), { code: 'invalid-response' })
+    }
+
+    /** 超时覆盖响应头与 JSON 响应体读取，不自动重试有副作用的请求。 */
+    async function requestJson(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+      const controller = new AbortController()
+      let timedOut = false
+      const timer = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, timeoutMs)
+      try {
+        const response = await fetch(url, { ...options, signal: controller.signal })
+        let payload
+        try {
+          payload = await response.json()
+        } catch {
+          throw invalidResponse()
+        }
+        if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) throw invalidResponse()
+        if (!response.ok) throw new Error(payload.message ?? payload.detail ?? `HTTP ${String(response.status)}`)
+        return payload
+      } catch (error) {
+        if (timedOut) throw Object.assign(new Error('request timed out'), { code: 'request-timeout' })
+        throw error
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+
     // ── editor preference store ──────────────────────────────────────────
 
     /**
@@ -281,7 +343,7 @@ window.__ModuleLoader__.load({
 
     /** Detection state: idle while nothing asked, then loading → ready/error. */
     const discovery = { listeners: new Set(), state: { status: 'idle', available: [] } }
-    let discoveryStarted = false
+    let discoveryRequest = null
 
     function subscribeDiscovery(listener) {
       discovery.listeners.add(listener)
@@ -309,22 +371,14 @@ window.__ModuleLoader__.load({
       writeEditor(available.includes(DEFAULT_EDITOR) ? DEFAULT_EDITOR : available[0])
     }
 
-    /** Ask the Host once per page which supported IDEs it can launch. */
-    function ensureDiscovery() {
-      if (discoveryStarted) return
-      discoveryStarted = true
+    /** 合并进行中的探测；失败后可重试，设置页也能强制重新扫描。 */
+    function ensureDiscovery(options) {
+      if (discoveryRequest !== null) return discoveryRequest
+      if (options?.force !== true && discovery.state.status === 'ready') return Promise.resolve(discovery.state)
       publishDiscovery({ status: 'loading', available: [] })
-      fetch(EDITORS_ROUTE, { headers: { accept: 'application/json' } })
-        .then(async (response) => {
-          let payload = null
-          try {
-            payload = await response.json()
-          } catch {
-            payload = null
-          }
-          if (!response.ok || payload === null || !Array.isArray(payload.editors)) {
-            throw new Error(`detection failed: HTTP ${String(response.status)}`)
-          }
+      discoveryRequest = requestJson(EDITORS_ROUTE, { headers: { accept: 'application/json' } })
+        .then((payload) => {
+          if (payload.ok !== true || !Array.isArray(payload.editors)) throw invalidResponse()
           const available = payload.editors
             .filter((entry) => entry !== null && typeof entry === 'object' && entry.available === true)
             .map((entry) => entry.id)
@@ -336,6 +390,10 @@ window.__ModuleLoader__.load({
           // Detection is an enhancement: the full list stays selectable.
           publishDiscovery({ status: 'error', available: [] })
         })
+        .finally(() => {
+          discoveryRequest = null
+        })
+      return discoveryRequest
     }
 
     // ── plugin update store ──────────────────────────────────────────────
@@ -363,17 +421,8 @@ window.__ModuleLoader__.load({
     /** Ask the host for the update state; `auto` lets the host skip disabled checks. */
     function fetchUpdateCheck(auto) {
       const url = auto ? UPDATE_ROUTE + '?auto=1' : UPDATE_ROUTE
-      return fetch(url, { headers: { accept: 'application/json' } }).then(async (response) => {
-        let payload = null
-        try {
-          payload = await response.json()
-        } catch {
-          payload = null
-        }
-        if (!response.ok || payload === null) {
-          const detail = payload !== null && typeof payload.detail === 'string' ? payload.detail : `HTTP ${String(response.status)}`
-          throw new Error(detail)
-        }
+      return requestJson(url, { headers: { accept: 'application/json' } }, UPDATE_CHECK_TIMEOUT_MS).then((payload) => {
+        if (payload.ok !== true) throw invalidResponse()
         return payload
       })
     }
@@ -393,6 +442,7 @@ window.__ModuleLoader__.load({
         .catch((error) => {
           publishUpdate({
             status: 'error',
+            error,
             message: error instanceof Error ? error.message : String(error),
             data: updates.state.data,
           })
@@ -408,25 +458,16 @@ window.__ModuleLoader__.load({
     function requestUpdateApply() {
       if (updates.state.status === 'applying') return Promise.resolve(null)
       publishUpdate({ status: 'applying', data: updates.state.data })
-      return fetch(UPDATE_ROUTE, { method: 'POST', headers: { accept: 'application/json' } })
-        .then(async (response) => {
-          let payload = null
-          try {
-            payload = await response.json()
-          } catch {
-            payload = null
-          }
-          if (!response.ok || payload === null) {
-            const detail = payload !== null && typeof payload.detail === 'string' ? payload.detail : `HTTP ${String(response.status)}`
-            throw new Error(detail)
-          }
+      return requestJson(UPDATE_ROUTE, { method: 'POST', headers: { accept: 'application/json' } }, UPDATE_APPLY_TIMEOUT_MS)
+        .then((payload) => {
+          if (typeof payload.ok !== 'boolean' || typeof payload.applied !== 'boolean') throw invalidResponse()
           return payload
         })
         .catch((error) => {
           publishUpdate({
             status: 'ready',
             data: updates.state.data,
-            applyError: error instanceof Error ? error.message : String(error),
+            applyError: error,
           })
           return null
         })
@@ -435,6 +476,8 @@ window.__ModuleLoader__.load({
     // ── toast store ──────────────────────────────────────────────────────
 
     const toastListeners = new Set()
+    /** 同一会话、文件、位置和编辑器的打开请求只允许一个同时执行。 */
+    const openRequests = new Set()
     let toastValue = null
     let toastTimer = null
 
@@ -473,7 +516,8 @@ window.__ModuleLoader__.load({
       editorListeners.clear()
       discovery.listeners.clear()
       discovery.state = { status: 'idle', available: [] }
-      discoveryStarted = false
+      discoveryRequest = null
+      openRequests.clear()
       updates.listeners.clear()
       updates.state = { status: 'idle' }
       updateRequest = null
@@ -521,7 +565,7 @@ window.__ModuleLoader__.load({
      * `#L<n>` fragment lives in the click closure, which React keeps out of the
      * DOM, so the label text is the only position channel. Models write that
      * position in several shapes: `file.ts:12`, `file.ts:12:4`, `#L12`, a
-     * `:12-20` / `:12–20` range, or a prose label such as `第 12 行` or
+     * `:12-20` / `:12–20` / `:12-L20` range, or a prose label such as `第 12 行` or
      * `line 12`. A range keeps its first line, the line an editor's goto takes.
      */
     function positionOf(label) {
@@ -549,8 +593,8 @@ window.__ModuleLoader__.load({
         const line = lineOf(english[1])
         return line === undefined ? {} : { line }
       }
-      // Trailing position suffix: `:12`, `:12:4`, `:12-20`, `：12`.
-      const suffix = /[::：](\d+)(?:\s*[-–—~～]\s*\d+)?(?::(\d+))?$/u.exec(label)
+      // DSH 可能将 #L12-L20 显示为 :12-L20；兼容两端的 L，并取范围起始行。
+      const suffix = /[:：]L?(\d+)(?:\s*[-–—~～]\s*L?\d+)?(?::(\d+))?$/u.exec(label)
       if (suffix !== null) {
         const line = lineOf(suffix[1])
         if (line === undefined) return {}
@@ -653,7 +697,7 @@ window.__ModuleLoader__.load({
       const menuRef = React.useRef(null)
 
       React.useEffect(() => {
-        ensureDiscovery()
+        ensureDiscovery({ force: true })
       }, [])
 
       // Ready detection narrows the list to installed IDEs; loading and failure
@@ -669,6 +713,7 @@ window.__ModuleLoader__.load({
       }, [])
 
       const openMenu = React.useCallback(() => {
+        ensureDiscovery()
         const element = selectorRef.current
         if (element === null) return
         const rect = element.getBoundingClientRect()
@@ -711,7 +756,9 @@ window.__ModuleLoader__.load({
       const selectedLabel = noEditors ? translate(t, 'settings.noneShort') : editorLabel(t, editor)
       const description = noEditors
         ? translate(t, 'settings.description') + ' ' + translate(t, 'settings.none')
-        : translate(t, 'settings.description')
+        : detected.status === 'error'
+          ? translate(t, 'settings.detectionFailed')
+          : translate(t, 'settings.description')
       const selector = h('button', {
         ref: selectorRef,
         type: 'button',
@@ -768,6 +815,11 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-oii-rowText' },
             h('div', { className: 'dsh-oii-title' }, translate(t, 'settings.title')),
             h('div', { className: 'dsh-oii-desc' }, description)),
+          detected.status === 'error' || noEditors ? h('button', {
+            type: 'button',
+            className: 'dsh-oii-selector',
+            onClick: () => ensureDiscovery({ force: true }),
+          }, translate(t, 'settings.retry')) : null,
           selector),
         menu,
       ]
@@ -794,6 +846,9 @@ window.__ModuleLoader__.load({
         && data.mode === 'git'
         && data.updateAvailable === true
         && data.dirty !== true
+        && data.trusted !== false
+        && data.ahead === 0
+        && data.reason === undefined
       const current = data !== undefined && typeof data.current === 'string' ? data.current : '—'
       const latest = data !== undefined && typeof data.latest === 'string' ? data.latest : ''
       // A docs-only or otherwise unbumped commit still counts as an update.
@@ -802,7 +857,7 @@ window.__ModuleLoader__.load({
 
       let description
       if (state.status === 'error') {
-        description = translate(t, 'update.error', { message: state.message ?? '' })
+        description = translate(t, 'update.error', { message: requestErrorMessage(t, state.error ?? state.message ?? '') })
       } else if (checking || data === undefined) {
         description = translate(t, 'update.checking')
       } else if (applying) {
@@ -829,8 +884,13 @@ window.__ModuleLoader__.load({
         }
       } else if (data.trusted === false) {
         description = translate(t, 'update.untrusted', { expected: data.expected ?? '' })
-      } else if (data.reason === 'fetch-failed') {
-        description = translate(t, 'update.error', { message: data.detail ?? translate(t, 'update.reason.fetch-failed') })
+      } else if (data.reason !== undefined && data.reason !== 'up-to-date') {
+        const reasonKey = 'update.reason.' + String(data.reason)
+        const translated = translate(t, reasonKey)
+        const message = typeof data.detail === 'string' && data.detail !== ''
+          ? data.detail
+          : translated === reasonKey ? String(data.reason) : translated
+        description = translate(t, 'update.error', { message })
       } else if (data.updateAvailable === true) {
         if (data.dirty === true) {
           description = translate(t, 'update.dirty', { latest: sameVersion ? current : latest, current })
@@ -861,6 +921,9 @@ window.__ModuleLoader__.load({
         }
         requestUpdateApply().then((payload) => {
           if (payload === null) {
+            showToast('error', translate(t, 'update.applyFailed', {
+              reason: requestErrorMessage(t, readUpdate().applyError ?? ''),
+            }))
             requestUpdateCheck({ force: true })
             return
           }
@@ -918,35 +981,32 @@ window.__ModuleLoader__.load({
           const { sessionId: session, cwd: workspace, t: translateNow, editor: editorId } = latest.current
           const display = displayTarget(target)
           const editorName = editorLabel(translateNow, editorId)
-          showToast('info', translate(translateNow, 'toast.opening', { target: display, editor: editorName }))
           const body = { sessionId: session ?? null, path: target.path, editor: editorId }
           if (workspace !== undefined) body.cwd = workspace
           if (target.line !== undefined) body.line = target.line
           if (target.column !== undefined) body.column = target.column
-          fetch(ROUTE, {
+          const requestKey = JSON.stringify(body)
+          if (openRequests.has(requestKey)) return
+          openRequests.add(requestKey)
+          showToast('info', translate(translateNow, 'toast.opening', { target: display, editor: editorName }))
+          requestJson(ROUTE, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(body),
-          }).then(async (response) => {
-            let payload = null
-            try {
-              payload = await response.json()
-            } catch {
-              payload = null
-            }
-            if (!response.ok) {
-              const message = payload !== null && typeof payload.message === 'string'
-                ? payload.message
-                : `HTTP ${String(response.status)}`
-              throw new Error(message)
+          }, OPEN_TIMEOUT_MS).then((payload) => {
+            if (payload.ok !== true || typeof payload.path !== 'string' || payload.path === '') {
+              if (typeof payload.message === 'string') throw new Error(payload.message)
+              throw invalidResponse()
             }
             const openedIn = payload !== null && typeof payload.editor === 'string'
               ? editorLabel(translateNow, payload.editor)
               : editorName
             showToast('ok', translate(translateNow, 'toast.opened', { target: display, editor: openedIn }))
           }).catch((error) => {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = requestErrorMessage(translateNow, error)
             showToast('error', translate(translateNow, 'toast.failed', { editor: editorName, message }))
+          }).finally(() => {
+            openRequests.delete(requestKey)
           })
         }
         const onClick = (event) => {
